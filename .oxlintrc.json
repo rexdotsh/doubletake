@@ -24,6 +24,7 @@
     "eqeqeq": "error",
     "prefer-const": "error",
     "no-var": "error",
-    "import/no-unassigned-import": "error"
+    "import/no-unassigned-import": "error",
+    "no-await-in-loop": "off"
   }
 }
