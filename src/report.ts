@@ -66,7 +66,8 @@ function deviceLine(e: Experiment): string {
 
 export function summary(e: Experiment): string {
   const [base, head] = sideLabels(e);
-  const lines = [`doubletake ${e.id} · ${deviceLine(e)} · ${base} → ${head}`, ''];
+  const sides = e.kind === 'check' ? head : `${base} → ${head}`;
+  const lines = [`doubletake ${e.id} · ${deviceLine(e)} · ${sides}`, ''];
   for (const s of e.series) {
     lines.push(
       `${s.case}  ★ ${s.primary.metric}  ${change(s.primary)}  ${verdict(s.primary)}  (${s.pairs} pairs, ${s.stopped})`,

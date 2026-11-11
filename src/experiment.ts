@@ -6,7 +6,7 @@ import type { Device } from './device.ts';
 import { Refusal } from './device.ts';
 import { isCount, metricInfo } from './metrics.ts';
 import { type RunResult, filmed, runOnce } from './run.ts';
-import { type Comparison, LOOKS, MIN_PAIRS, POCOCK_LEVEL, compare, holm, median } from './stats.ts';
+import { type Comparison, LOOKS, MIN_PAIRS, POCOCK_LEVEL, compare, median } from './stats.ts';
 import { type Experiment, type Series, type Variant, saveExperiment } from './store.ts';
 import { get } from './util.ts';
 
@@ -57,7 +57,6 @@ async function block(o: BenchOptions, name: string, c: Case, v: Variant, tag: st
         device: o.device,
         appId: v.appId,
         bench: o.bench,
-        name,
         case: c,
         tap,
         offset,
@@ -155,15 +154,16 @@ async function series(o: BenchOptions, name: string): Promise<Series> {
   const others = [...new Set(pairs.flatMap(([b, h]) => [...Object.keys(b.values), ...Object.keys(h.values)]))].filter(
     (m) => m !== c.primary,
   );
-  const secondaries = others.map((m) => comparisonOf(m, pairs, 0.95, bound)).filter((x): x is Comparison => x !== null);
-  const tested = secondaries.filter((s) => declared.has(s.metric) && !s.exact);
-  const rejected = holm(tested.map((s) => s.p));
+  // Declared secondaries are tested at a Bonferroni level (95% overall across them), so their direction and
+  // equivalence claims are both corrected; the rest are descriptive intervals at 95%.
+  const tests = Math.max(1, others.filter((m) => declared.has(m)).length);
+  const secondaries = others
+    .map((m) => comparisonOf(m, pairs, declared.has(m) ? 1 - 0.05 / tests : 0.95, bound))
+    .filter((x): x is Comparison => x !== null);
   for (const s of secondaries) {
-    const at = tested.indexOf(s);
-    const confirmed = at >= 0 && primary.decided && (rejected[at] || s.verdict_kind === 'same');
     if (s.exact) continue;
-    if (!confirmed) {
-      s.verdict_kind = declared.has(s.metric) && primary.decided ? 'unclear' : 'untested';
+    if (!declared.has(s.metric) || !primary.decided) {
+      s.verdict_kind = 'untested';
       s.decided = false;
     }
   }
@@ -189,6 +189,10 @@ function fmt(v: number | undefined): string {
 }
 
 export async function runBench(o: BenchOptions): Promise<Experiment> {
+  if (o.base.appId === o.head.appId && (!o.base.artifact || !o.head.artifact))
+    throw new Error(
+      `base and head are both ${o.base.appId}: installing one replaces the other, so pass both as build files (or give them different bundle ids)`,
+    );
   await saveExperiment(o.dir, o.experiment);
   await o.device.prepare();
   if (o.base.appId !== o.head.appId) await Promise.all([install(o, o.base), install(o, o.head)].map((p) => p));

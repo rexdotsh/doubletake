@@ -248,20 +248,8 @@ export function compare(base: readonly number[], head: readonly number[], o: Com
   const significant = p < 1 - o.level;
   if (hi < 0 && significant) kind = sign > 0 ? 'better' : 'worse';
   else if (lo > 0 && significant) kind = sign > 0 ? 'worse' : 'better';
-  else if (lo > -boundScaled && hi < boundScaled) kind = 'same';
+  else if ((lo > -boundScaled && hi < boundScaled) || (lo === 0 && hi === 0)) kind = 'same';
   else if (needed === null || needed > n) kind = 'underpowered';
   const decided = kind === 'better' || kind === 'worse' || kind === 'same';
   return { ...common, ...interval, verdict_kind: kind, decided, needed_pairs: needed };
-}
-
-/** Holm's step-down over secondaries: returns which p-values are rejected at `alpha` overall. */
-export function holm(ps: readonly number[], alpha = 0.05): boolean[] {
-  const order = ps.map((p, i) => ({ p, i })).toSorted((a, b) => a.p - b.p);
-  const rejected = ps.map(() => false);
-  for (let k = 0; k < order.length; k++) {
-    const { p, i } = get(order, k);
-    if (p > alpha / (order.length - k)) break;
-    rejected[i] = true;
-  }
-  return rejected;
 }

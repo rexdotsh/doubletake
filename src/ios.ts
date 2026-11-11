@@ -117,8 +117,8 @@ function simulator(udid: string, name: string, os: string): Device {
       if (!pid) throw new Error(`simctl launch printed no pid: ${out}`);
       return { t0: await processStart(pid), pid };
     },
-    async usage(pid) {
-      const cpu = await run('ps', ['-o', 'time=', '-p', String(pid)], { check: false });
+    cpuMs: async (pid) => psTime((await run('ps', ['-o', 'time=', '-p', String(pid)])).stdout),
+    async memory(pid) {
       const dir = await mkdtemp(join(tmpdir(), 'doubletake-'));
       try {
         const file = join(dir, 'footprint.json');
@@ -128,11 +128,7 @@ function simulator(udid: string, name: string, os: string): Device {
           const bytes = dig(json, 'processes', 0, 'auxiliary', key);
           return typeof bytes === 'number' ? bytes / 2 ** 20 : undefined;
         };
-        return {
-          cpuMs: psTime(cpu.stdout),
-          memoryEndMiB: mib('phys_footprint'),
-          memoryPeakMiB: mib('phys_footprint_peak'),
-        };
+        return { endMiB: mib('phys_footprint'), peakMiB: mib('phys_footprint_peak') };
       } finally {
         await rm(dir, { recursive: true, force: true });
       }

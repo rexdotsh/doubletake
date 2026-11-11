@@ -11,11 +11,7 @@ export type Launched = {
   ttid?: number;
 };
 
-export type Usage = {
-  cpuMs: number;
-  memoryEndMiB?: number;
-  memoryPeakMiB?: number;
-};
+type Memory = { endMiB?: number; peakMiB?: number };
 
 export type Action =
   | { tap: [number, number] | string }
@@ -26,8 +22,8 @@ type Frames = { total: number; janky: number; p90: number };
 /** SDK lines from the app, collected while a block runs. */
 export interface LogTap {
   readonly events: SdkEvent[];
-  /** Resolves with the event's device time once a matching event at or after `since` arrives. */
-  waitFor(match: (e: SdkEvent) => boolean, since: number, timeout: number): Promise<number>;
+  /** Resolves with the first matching event at or after `since` (device clock), once it arrives. */
+  waitFor(match: (e: SdkEvent) => boolean, since: number, timeout: number): Promise<SdkEvent>;
   stop(): Promise<void>;
 }
 
@@ -48,7 +44,9 @@ export interface Device {
   isInstalled(appId: string): Promise<boolean>;
   terminate(appId: string): Promise<void>;
   launch(appId: string): Promise<Launched>;
-  usage(pid: number, appId: string): Promise<Usage>;
+  /** The process's user + system CPU time so far: cheap, read right at a window's edges. */
+  cpuMs(pid: number): Promise<number>;
+  memory(pid: number, appId: string): Promise<Memory>;
   logs(appId: string): Promise<LogTap>;
   /** Device clock minus host clock, ms. */
   clockOffset(): Promise<number>;
@@ -93,7 +91,7 @@ export async function logTap(
           const found = events.find((e) => e.t >= since && match(e));
           if (!found) return;
           cleanup();
-          resolve(found.t);
+          resolve(found);
         };
         const timer = setTimeout(() => {
           cleanup();

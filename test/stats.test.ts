@@ -4,7 +4,6 @@ import {
   POCOCK_LEVEL,
   bootstrapInterval,
   compare,
-  holm,
   rng,
   signedRankP,
   tQuantile,
@@ -115,7 +114,7 @@ test('the bootstrap interval is reproducible for a seed and widens for few pairs
   expect(hi6 - lo6).toBeGreaterThan(hi12 - lo12);
 });
 
-test('holm rejects step-down', () => {
-  expect(holm([0.01, 0.04, 0.03], 0.05)).toEqual([true, false, false]);
-  expect(holm([0.001, 0.01, 0.02], 0.05)).toEqual([true, true, true]);
+test('eight identical zero pairs are the same, not unclear', () => {
+  const c = compare([0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0], { ...opts, metric: 'js.stall', ratio: false });
+  expect(c.verdict_kind).toBe('same');
 });

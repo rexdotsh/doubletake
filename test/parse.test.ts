@@ -10,33 +10,33 @@ test('SDK lines parse whatever the logger put before them', () => {
     t: 1000,
     name: 'home',
   });
-  expect(parseSdkLine('I ReactNativeJS: [doubletake] s 5')).toEqual({ kind: 'start', t: 5 });
-  expect(parseSdkLine('[doubletake] c 9 1 2 3 4 5 6 7')).toEqual({
-    kind: 'counters',
-    t: 9,
-    frames: 1,
-    dropped: 2,
-    stall: 3,
-    requests: 4,
-    bytes: 5,
-    commits: 6,
-    render: 7,
+  expect(parseSdkLine('I ReactNativeJS: [doubletake] s 5 fn')).toEqual({
+    kind: 'start',
+    t: 5,
+    frames: true,
+    network: true,
   });
-  expect(parseSdkLine('[doubletake] c 9 1 2')).toBeNull();
+  expect(parseSdkLine('[doubletake] s 5 -')).toEqual({ kind: 'start', t: 5, frames: false, network: false });
+  expect(parseSdkLine('[doubletake] f 9 2 33')).toEqual({ kind: 'frame', t: 9, missed: 2, late: 33 });
+  expect(parseSdkLine('[doubletake] r 9')).toBeNull();
   expect(parseSdkLine('unrelated')).toBeNull();
 });
 
-test('counters in a window count from the process running at its end', () => {
+test('a window counts the events inside it, in the process reporting at its end', () => {
   const events = [
-    parseSdkLine('[doubletake] s 0'),
-    parseSdkLine('[doubletake] c 100 10 1 20 1 100 0 0'),
-    parseSdkLine('[doubletake] s 1000'),
-    parseSdkLine('[doubletake] c 1100 5 0 0 0 0 0 0'),
-    parseSdkLine('[doubletake] c 1300 30 3 50 2 300 0 0'),
-    parseSdkLine('[doubletake] m 1350 home'),
-  ].filter((e) => e !== null);
-  expect(countersIn(events, 900, 1400)).toMatchObject({ frames: 30, dropped: 3, requests: 2 });
-  expect(countersIn(events, 1200, 1400)).toMatchObject({ frames: 25, dropped: 3 });
+    '[doubletake] s 0 fn',
+    '[doubletake] r 100 500',
+    '[doubletake] s 1000 fn',
+    '[doubletake] f 1100 1 20',
+    '[doubletake] r 1150 300',
+    '[doubletake] f 1300 2 40',
+    '[doubletake] m 1350 home',
+    '[doubletake] r 1500 100',
+  ]
+    .map(parseSdkLine)
+    .filter((e) => e !== null);
+  expect(countersIn(events, 900, 1400)?.counters).toMatchObject({ dropped: 3, stall: 60, requests: 1, bytes: 300 });
+  expect(countersIn(events, 1200, 1400)?.counters).toMatchObject({ dropped: 2, requests: 0 });
   expect(countersIn([], 0, 1)).toBeUndefined();
   expect(marksAfter(events, 1000).get('home')).toBe(1350);
 });

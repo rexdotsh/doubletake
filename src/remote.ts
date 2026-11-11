@@ -63,7 +63,11 @@ async function hashPath(path: string, hash = createHash('sha256')): Promise<stri
 export async function sendArtifact(host: Host, local: string): Promise<string> {
   const dir = `${REMOTE}/artifacts/${await hashPath(local)}`;
   const path = `${dir}/${basename(local)}`;
-  if ((await sh(host, `test -e ${q(path)}`)) !== 0) await send(host, local, dir, basename(local));
+  if ((await sh(host, `test -e ${q(path)}`)) === 0) return path;
+  // Upload into a staging folder and publish it with one rename, so an interrupted upload is never a cache hit.
+  const staging = `${REMOTE}/artifacts/.staging-${process.pid}-${Date.now()}`;
+  await send(host, local, staging, basename(local));
+  await shOk(host, `mkdir -p ${q(dir)} && mv ${q(`${staging}/${basename(local)}`)} ${q(path)} && rm -rf ${q(staging)}`);
   return path;
 }
 
@@ -96,13 +100,24 @@ export async function runRemote(host: Host, r: RemoteRun): Promise<void> {
   const benchDir = dirname(resolve(r.bench));
   await send(host, benchDir, work, 'bench');
   const bench = `${work}/bench/${relative(benchDir, resolve(r.bench))}`;
-  const command = ['node', `${work}/doubletake.mjs`, ...r.args(bench)].map(q).join(' ');
+  // The host prints its progress on stderr; its summary is printed here, from the copied record.
+  const command = `${['node', '--disable-warning=MODULE_TYPELESS_PACKAGE_JSON', `${work}/doubletake.mjs`, ...r.args(bench)].map(q).join(' ')} >/dev/null`;
   const code = await sh(host, command, { inherit: true });
+  try {
+    await fetchExperiment(host, r.id);
+  } catch (error) {
+    if (code === 0) throw error;
+  } finally {
+    await sh(host, `rm -rf ${q(work)}`);
+  }
+  if (code !== 0) process.exitCode = code;
+}
+
+async function fetchExperiment(host: Host, id: string): Promise<void> {
   const local = join(home(), 'experiments');
   await mkdir(local, { recursive: true });
   const untar = spawn('tar', ['-xzf', '-', '-C', local], { stdio: ['pipe', 'ignore', 'inherit'] });
-  await sh(host, `cd ${REMOTE}/experiments 2>/dev/null && tar -czf - ${q(r.id)} || true`, { stdout: untar.stdin });
-  await new Promise((done) => untar.on('close', done));
-  await sh(host, `rm -rf ${q(work)}`);
-  if (code !== 0) process.exitCode = code;
+  const untarred = new Promise<number>((done) => untar.on('close', (status) => done(status ?? 1)));
+  const sent = await sh(host, `cd ${REMOTE}/experiments && tar -czf - ${q(id)}`, { stdout: untar.stdin });
+  if (sent !== 0 || (await untarred) !== 0) throw new Error(`could not copy ${id} back from the host`);
 }
