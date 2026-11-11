@@ -42,13 +42,17 @@ export function parseSdkLine(text: string): SdkEvent | null {
   return null;
 }
 
-/** What happened in [from, to] (device clock), in the app process that was reporting at `to`. */
+/**
+ * What happened in [from, to] (device clock), in the app process that started at `launched`: only that
+ * process's own start line counts, so a launch that never reports is refused, not read as zeros.
+ */
 export function countersIn(
   events: readonly SdkEvent[],
   from: number,
   to: number,
+  launched: number,
 ): { counters: Counters; frames: boolean; network: boolean } | undefined {
-  const start = events.findLast((e) => e.kind === 'start' && e.t <= to);
+  const start = events.findLast((e) => e.kind === 'start' && e.t >= launched && e.t <= to);
   if (start?.kind !== 'start') return undefined;
   const counters: Counters = { dropped: 0, stall: 0, requests: 0, bytes: 0, commits: 0, render: 0 };
   for (const e of events) {
@@ -67,8 +71,10 @@ export function countersIn(
   return { counters, frames: start.frames, network: start.network };
 }
 
-export function marksAfter(events: readonly SdkEvent[], t: number): Map<string, number> {
+/** The first time each mark was written in [from, to]. */
+export function marksIn(events: readonly SdkEvent[], from: number, to: number): Map<string, number> {
   const marks = new Map<string, number>();
-  for (const e of events) if (e.kind === 'mark' && e.t >= t && !marks.has(e.name)) marks.set(e.name, e.t);
+  for (const e of events)
+    if (e.kind === 'mark' && e.t >= from && e.t <= to && !marks.has(e.name)) marks.set(e.name, e.t);
   return marks;
 }

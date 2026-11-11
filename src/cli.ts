@@ -166,7 +166,7 @@ async function remote(command: 'bench' | 'check', file: string, ssh: string, fla
     return v ? [`--${k}`, v] : [];
   });
   const platform = platformOf(flags, [flags.base, flags.head]);
-  await runRemote(host, {
+  const fetched = await runRemote(host, {
     id,
     bench: file,
     args: (benchPath) => [
@@ -183,6 +183,7 @@ async function remote(command: 'bench' | 'check', file: string, ssh: string, fla
       ...passthrough,
     ],
   });
+  if (!fetched) return;
   const { experiment } = await loadExperiment(id);
   out(flags.json ? JSON.stringify(experiment, null, 2) : summary(experiment));
 }

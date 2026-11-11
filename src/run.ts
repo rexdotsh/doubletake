@@ -2,12 +2,14 @@ import type { Bench, Case } from './bench.ts';
 import { caseKind, ms } from './bench.ts';
 import type { Device, LogTap, Recording } from './device.ts';
 import { Refusal } from './device.ts';
-import { countersIn, marksAfter } from './events.ts';
+import { countersIn, marksIn } from './events.ts';
 import { type FlowState, launch, runSteps } from './flow.ts';
 import { sleep } from './sh.ts';
 import { decodeFrames, visualTimes } from './visual.ts';
 
 type RunValues = Record<string, number>;
+/** A measured window and the start of the app process in it, device clock. */
+type Window = { from: number; to: number; launched: number };
 export type RunResult = {
   values: RunValues;
   /** Metrics the run could not give, with the reason. */
@@ -43,8 +45,9 @@ function refuse(refused: Record<string, string>, metrics: readonly string[], why
 }
 
 /** SDK counters for a window; families the app did not turn on are refused, never zero. */
-function addSdk(values: RunValues, refused: Record<string, string>, ctx: RunContext, from: number, to: number): void {
-  const got = countersIn(ctx.tap.events, from, to);
+function addSdk(values: RunValues, refused: Record<string, string>, ctx: RunContext, window: Window): void {
+  for (const [name, at] of marksIn(ctx.tap.events, window.from, window.to)) values[`mark.${name}`] = at - window.from;
+  const got = countersIn(ctx.tap.events, window.from, window.to, window.launched);
   if (!got) {
     refuse(
       refused,
@@ -130,8 +133,7 @@ async function launchRun(
   const end = Date.now() + ctx.offset;
   await sleep(DRAIN_MS);
   await addMemory(values, ctx, launched.pid);
-  for (const [name, at] of marksAfter(ctx.tap.events, start)) values[`mark.${name}`] = at - start;
-  addSdk(values, refused, ctx, start, end);
+  addSdk(values, refused, ctx, { from: start, to: end, launched: start });
   refuse(refused, UI_FRAME_METRICS, 'NotForCase: UI frame counts are for run cases');
   return recording;
 }
@@ -169,9 +171,11 @@ async function windowRun(
     values['frames.p90'] = frames.p90;
   } else
     refuse(refused, UI_FRAME_METRICS, 'NotOnThisPlatform: no UI frame counts on the iOS Simulator without Instruments');
-  for (const [name, at] of marksAfter(ctx.tap.events, start + ctx.offset))
-    values[`mark.${name}`] = at - (start + ctx.offset);
-  addSdk(values, refused, ctx, start + ctx.offset, end + ctx.offset);
+  addSdk(values, refused, ctx, {
+    from: start + ctx.offset,
+    to: end + ctx.offset,
+    launched: (state.launched?.t0 ?? 0) + ctx.offset,
+  });
 }
 
 /** One run of a case on an installed app. */

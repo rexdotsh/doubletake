@@ -88,8 +88,8 @@ export type RemoteRun = {
   id: string;
 };
 
-/** Runs a doubletake command on the host and copies its experiment back into the local store. */
-export async function runRemote(host: Host, r: RemoteRun): Promise<void> {
+/** Runs a doubletake command on the host and copies its experiment back; false when no record came back. */
+export async function runRemote(host: Host, r: RemoteRun): Promise<boolean> {
   const work = `${REMOTE}/runs/${r.id}`;
   const cli = await bundle();
   try {
@@ -103,14 +103,17 @@ export async function runRemote(host: Host, r: RemoteRun): Promise<void> {
   // The host prints its progress on stderr; its summary is printed here, from the copied record.
   const command = `${['node', '--disable-warning=MODULE_TYPELESS_PACKAGE_JSON', `${work}/doubletake.mjs`, ...r.args(bench)].map(q).join(' ')} >/dev/null`;
   const code = await sh(host, command, { inherit: true });
+  let fetched = true;
   try {
     await fetchExperiment(host, r.id);
   } catch (error) {
     if (code === 0) throw error;
+    fetched = false;
   } finally {
     await sh(host, `rm -rf ${q(work)}`);
   }
   if (code !== 0) process.exitCode = code;
+  return fetched;
 }
 
 async function fetchExperiment(host: Host, id: string): Promise<void> {

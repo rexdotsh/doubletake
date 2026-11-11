@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test';
 import { validate } from '../src/bench.ts';
-import { countersIn, marksAfter, parseSdkLine } from '../src/events.ts';
+import { countersIn, marksIn, parseSdkLine } from '../src/events.ts';
 import { psTime } from '../src/ios.ts';
 import { visualTimes } from '../src/visual.ts';
 
@@ -35,10 +35,17 @@ test('a window counts the events inside it, in the process reporting at its end'
   ]
     .map(parseSdkLine)
     .filter((e) => e !== null);
-  expect(countersIn(events, 900, 1400)?.counters).toMatchObject({ dropped: 3, stall: 60, requests: 1, bytes: 300 });
-  expect(countersIn(events, 1200, 1400)?.counters).toMatchObject({ dropped: 2, requests: 0 });
-  expect(countersIn([], 0, 1)).toBeUndefined();
-  expect(marksAfter(events, 1000).get('home')).toBe(1350);
+  expect(countersIn(events, 900, 1400, 990)?.counters).toMatchObject({
+    dropped: 3,
+    stall: 60,
+    requests: 1,
+    bytes: 300,
+  });
+  expect(countersIn(events, 1200, 1400, 990)?.counters).toMatchObject({ dropped: 2, requests: 0 });
+  expect(countersIn(events, 2000, 2400, 1990)).toBeUndefined();
+  expect(countersIn([], 0, 1, 0)).toBeUndefined();
+  expect(marksIn(events, 1000, 2000).get('home')).toBe(1350);
+  expect(marksIn(events, 1000, 1300).has('home')).toBe(false);
 });
 
 test('bench files are checked with the nearest key', () => {
