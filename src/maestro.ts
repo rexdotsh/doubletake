@@ -4,11 +4,16 @@ import { join } from 'node:path';
 import type { Action } from './device.ts';
 import { run, which } from './sh.ts';
 
-/** Runs a Maestro flow file on a device. Maestro's own startup (seconds) lands in whatever window holds it. */
+/**
+ * Runs a Maestro flow file on a device: the `maestro` step, and Android taps by text (adb has no selector).
+ * iOS input goes through AXe instead. Maestro's own startup (seconds) lands in whatever window holds it.
+ */
 export async function maestro(device: string, file: string, env: Record<string, string> = {}): Promise<void> {
   const bin = await which('maestro');
   if (!bin)
-    throw new Error('maestro is not on PATH: install it (https://maestro.mobile.dev) for tap, swipe and maestro steps');
+    throw new Error(
+      'maestro is not on PATH: install it (https://maestro.mobile.dev) for maestro steps and Android taps by text',
+    );
   const envArgs = Object.entries(env).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
   await run(bin, ['--device', device, 'test', ...envArgs, file], { timeout: 300_000 });
 }

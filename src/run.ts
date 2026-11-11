@@ -170,6 +170,7 @@ async function windowRun(
   if (c.setup) await runSteps(c.setup, state);
   if (!state.launched) await launch(state);
   const pid = state.launched?.pid ?? 0;
+  if (c.run) await device.prepareInput?.();
   await device.frames?.reset(appId);
   const recording = ctx.video ? await device.record(ctx.video) : undefined;
   if (recording) await sleep(1000);

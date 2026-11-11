@@ -59,8 +59,10 @@ export interface Device {
   openUrl(url: string): Promise<void>;
   /** UI frames since the last reset, where the platform reports them. */
   frames?: { reset(appId: string): Promise<void>; read(appId: string): Promise<Frames> };
-  /** Taps and swipes in order. iOS has no input of its own, so they go through one Maestro flow there. */
+  /** Taps and swipes in order: AXe on the iOS Simulator, adb on Android (Maestro for a tap by text). */
   input(appId: string, actions: readonly Action[]): Promise<void>;
+  /** Reads what input needs (the screen's geometry) at an untimed moment, right before a timed window. */
+  prepareInput?(): Promise<void>;
 }
 
 /** A measurement doubletake will not give, with the validator that refused it (exit 4). */
