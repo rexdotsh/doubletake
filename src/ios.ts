@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type Device, type Recording, logTap } from './device.ts';
-import { maestroInline, pointArg } from './maestro.ts';
+import { maestroCommands, maestroInline } from './maestro.ts';
 import { run, stop, stream } from './sh.ts';
 import { dig, isRecord } from './util.ts';
 
@@ -169,17 +169,6 @@ function simulator(udid: string, name: string, os: string): Device {
       };
     },
     openUrl: async (url) => void (await simctl('openurl', udid, url)),
-    input: (appId, actions) =>
-      maestroInline(
-        udid,
-        appId,
-        actions.map((a) =>
-          'tap' in a
-            ? typeof a.tap === 'string'
-              ? `tapOn: ${JSON.stringify(a.tap)}`
-              : `tapOn:\n    point: ${pointArg(a.tap)}`
-            : `swipe:\n    start: ${pointArg(a.swipe.from)}\n    end: ${pointArg(a.swipe.to)}\n    duration: ${a.swipe.duration}`,
-        ),
-      ),
+    input: (appId, actions) => maestroInline(udid, appId, maestroCommands(actions)),
   };
 }

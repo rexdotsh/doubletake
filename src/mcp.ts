@@ -74,6 +74,14 @@ function cli(args: string[]): Promise<{ code: number; out: string }> {
   });
 }
 
+// One device-driving command at a time: two benches on one simulator would install over and stop each other.
+let queue: Promise<unknown> = Promise.resolve();
+function serialized<T>(work: () => Promise<T>): Promise<T> {
+  const next = queue.then(work, work);
+  queue = next.catch(() => undefined);
+  return next;
+}
+
 async function call(name: string, input: Record<string, unknown>): Promise<{ text: string; error: boolean }> {
   const tool = TOOLS.find((t) => t.name === name);
   if (!tool) return { text: `unknown tool ${name}`, error: true };
@@ -89,7 +97,7 @@ async function call(name: string, input: Record<string, unknown>): Promise<{ tex
     if (v) args.push(`--${flag}`, v);
   }
   if (name === 'bench' || name === 'check') args.push('--json');
-  const { code, out } = await cli(args);
+  const { code, out } = name === 'bench' || name === 'check' ? await serialized(() => cli(args)) : await cli(args);
   return { text: out.trim(), error: code !== 0 && code !== 5 };
 }
 
@@ -100,7 +108,15 @@ function reply(id: unknown, result: unknown): void {
 export function serve(): void {
   const lines = createInterface({ input: process.stdin });
   lines.on('line', (line) => {
-    const message: unknown = JSON.parse(line);
+    let message: unknown;
+    try {
+      message = JSON.parse(line);
+    } catch {
+      process.stdout.write(
+        `${JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } })}\n`,
+      );
+      return;
+    }
     if (!isRecord(message) || message.id === undefined) return;
     const { id, method } = message;
     const params = isRecord(message.params) ? message.params : {};
@@ -110,6 +126,7 @@ export function serve(): void {
         capabilities: { tools: {} },
         serverInfo: { name: 'doubletake', version: pkg.version },
       });
+    else if (method === 'ping') reply(id, {});
     else if (method === 'tools/list')
       reply(id, { tools: TOOLS.map((t) => ({ name: t.name, description: t.description, inputSchema: schema(t) })) });
     else if (method === 'tools/call') {

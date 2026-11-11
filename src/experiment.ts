@@ -7,7 +7,7 @@ import { Refusal } from './device.ts';
 import { isCount, metricInfo } from './metrics.ts';
 import { type RunResult, filmed, runOnce } from './run.ts';
 import { type Comparison, LOOKS, MIN_PAIRS, POCOCK_LEVEL, compare, median } from './stats.ts';
-import { type Experiment, type Series, type Variant, saveExperiment } from './store.ts';
+import { type Experiment, type Series, type Variant, lockDevice, saveExperiment } from './store.ts';
 import { type Clip, sideBySide } from './video.ts';
 import { get } from './util.ts';
 
@@ -83,8 +83,8 @@ async function block(o: BenchOptions, name: string, c: Case, v: Variant, tag: st
   const names = new Set(runs.flatMap((r) => [...Object.keys(r.values), ...Object.keys(r.refused)]));
   for (const metric of names) {
     const got = runs.map((r) => r.values[metric]).filter((x): x is number => x !== undefined);
-    if (got.length === runs.length) values[metric] = median(got);
     if (new Set(got).size > 1) varying.add(metric);
+    if (got.length === runs.length) values[metric] = median(got);
     else
       refused[metric] =
         runs.map((r) => r.refused[metric]).find(Boolean) ??
@@ -234,6 +234,15 @@ async function film(o: BenchOptions, name: string): Promise<string> {
 }
 
 export async function runBench(o: BenchOptions): Promise<Experiment> {
+  const release = await lockDevice(o.device.id);
+  try {
+    return await benchLocked(o);
+  } finally {
+    await release();
+  }
+}
+
+async function benchLocked(o: BenchOptions): Promise<Experiment> {
   if (o.base.appId === o.head.appId && (!o.base.artifact || !o.head.artifact))
     throw new Error(
       `base and head are both ${o.base.appId}: installing one replaces the other, so pass both as build files (or give them different bundle ids)`,
@@ -256,6 +265,15 @@ export async function runBench(o: BenchOptions): Promise<Experiment> {
 }
 
 export async function runCheck(o: Omit<BenchOptions, 'base' | 'pairs' | 'warmup'>): Promise<Experiment> {
+  const release = await lockDevice(o.device.id);
+  try {
+    return await check(o);
+  } finally {
+    await release();
+  }
+}
+
+async function check(o: Omit<BenchOptions, 'base' | 'pairs' | 'warmup'>): Promise<Experiment> {
   await saveExperiment(o.dir, o.experiment);
   await o.device.prepare();
   for (const name of o.cases) {

@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { Platform } from './metrics.ts';
@@ -106,4 +106,25 @@ export async function loadExperiment(ref: string): Promise<{ dir: string; experi
   const experiment = await readExperiment(dir);
   if (!experiment) throw new Error(`${join(dir, 'result.json')} is not a doubletake experiment`);
   return { dir, experiment };
+}
+
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Takes the device for one bench at a time across processes; returns the release. */
+export async function lockDevice(device: string): Promise<() => Promise<void>> {
+  const dir = join(home(), 'locks');
+  await mkdir(dir, { recursive: true });
+  const file = join(dir, `${device.replace(/[^\w.-]/g, '_')}.pid`);
+  const holder = Number(await readFile(file, 'utf8').catch(() => ''));
+  if (holder && holder !== process.pid && alive(holder))
+    throw new Error(`device ${device} is in use by doubletake (pid ${holder}): one bench per device at a time`);
+  await writeFile(file, String(process.pid));
+  return () => rm(file, { force: true });
 }

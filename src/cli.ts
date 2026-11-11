@@ -263,7 +263,8 @@ async function report(ref: string | undefined, flags: Flags): Promise<void> {
   const file = join(dir, 'card.md');
   await writeFile(file, `${body}\n`);
   const repo = flags.repo ? ['--repo', flags.repo] : [];
-  const video = experiment.video ? ['--attach', `${join(dir, experiment.video)}#side-by-side`] : [];
+  // gh refuses alt text on a video attachment.
+  const video = experiment.video ? ['--attach', join(dir, experiment.video)] : [];
   const result = await run('gh', ['pr', 'comment', flags.comment, ...repo, '--body-file', file, ...video]);
   out(result.stdout.trim());
 }

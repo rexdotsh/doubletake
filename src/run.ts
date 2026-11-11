@@ -97,10 +97,21 @@ async function analyseVideo(
   const file = await recording.stop();
   const frames = await decodeFrames(file);
   const seconds = frames.length / VIDEO_FPS;
+  if (recording.startedAt === undefined) {
+    // No clock for the video's first frame: no launch.visual, and the clip starts at its first change.
+    if (launchCase)
+      refused['launch.visual'] = 'NoVideoClock: this recorder gives no start time to align the launch with';
+    try {
+      return { file, first: visualTimes(frames, bench.ignore, 0).first / 1000, seconds };
+    } catch (error) {
+      if (error instanceof Refusal) return { file, first: 0, seconds };
+      throw error;
+    }
+  }
   const at = Math.max(0, action - recording.startedAt);
   try {
     const visual = visualTimes(frames, bench.ignore, 1000, at);
-    if (launchCase) values['launch.visual'] = visual.complete - visual.first;
+    if (launchCase) values['launch.visual'] = visual.complete - at;
   } catch (error) {
     if (!(error instanceof Refusal)) throw error;
     if (launchCase) refused['launch.visual'] = `${error.validator}: ${error.message}`;
@@ -169,14 +180,15 @@ async function windowRun(
   else await runSteps(c.run ?? [], state);
   const end = Date.now();
   const cpu = (await device.cpuMs(pid)) - cpuBefore;
+  // Frame counters keep counting: read them at the window's end, before the padding, drain and memory.
+  const frames = await device.frames?.read(appId);
   values['cpu.time'] = cpu;
   if (c.idle) values['cpu.idle'] = cpu / ((end - start) / 1000);
   else values['run.duration'] = end - start;
   if (recording) await sleep(1000);
   await sleep(DRAIN_MS);
   await addMemory(values, ctx, pid);
-  if (device.frames) {
-    const frames = await device.frames.read(appId);
+  if (frames) {
     values['frames.total'] = frames.total;
     values['frames.janky'] = frames.janky;
     if (frames.total > 0) values['frames.janky.pct'] = (100 * frames.janky) / frames.total;

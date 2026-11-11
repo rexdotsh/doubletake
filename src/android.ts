@@ -1,7 +1,7 @@
 import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { type Device, type Recording, logTap } from './device.ts';
-import { maestroInline } from './maestro.ts';
+import { maestroCommands, maestroInline } from './maestro.ts';
 import { run, sleep, stop, stream } from './sh.ts';
 
 type Adb = (...args: string[]) => Promise<string>;
@@ -164,15 +164,27 @@ function device(serial: string, adb: Adb, shell: (cmd: string) => Promise<string
     clockOffset: () => clockOffset(shell),
     async record(path): Promise<Recording> {
       const remote = `/data/local/tmp/doubletake-${Date.now()}.mp4`;
-      const child = stream('adb', ['-s', serial, 'shell', 'screenrecord', '--bit-rate', '8000000', remote], () => {});
-      // screenrecord prints nothing when it starts; it is capturing well within half a second.
+      // The shell prints screenrecord's pid, then waits for it: the adb child exits once the MP4 is written.
+      const first = Promise.withResolvers<string>();
+      const child = stream(
+        'adb',
+        ['-s', serial, 'shell', `screenrecord --bit-rate 8000000 ${remote} & echo $!; wait`],
+        (line) => first.resolve(line.trim()),
+      );
+      const exited = new Promise<void>((resolve) => child.once('close', () => resolve()));
+      const timer = setTimeout(() => first.resolve(''), 2000);
+      const pid = await first.promise;
+      clearTimeout(timer);
+      if (!/^\d+$/.test(pid)) throw new Error('screenrecord did not start');
       await sleep(500);
       return {
-        startedAt: Date.now() - 250,
         async stop() {
-          await shell('pkill -INT screenrecord || true');
-          await stop(child, 'SIGTERM');
-          await sleep(500);
+          await shell(`kill -INT ${pid} 2>/dev/null || true`);
+          const done = await Promise.race([exited.then(() => true), sleep(15_000).then(() => false)]);
+          if (!done) {
+            await stop(child, 'SIGKILL');
+            throw new Error('screenrecord did not finish its file within 15 s');
+          }
           await adb('pull', remote, path);
           await shell(`rm -f ${remote}`);
           return path;
@@ -187,16 +199,9 @@ function device(serial: string, adb: Adb, shell: (cmd: string) => Promise<string
       read: async (pkg) => parseGfxinfo(await shell(`dumpsys gfxinfo ${pkg}`)),
     },
     async input(pkg, actions) {
+      // A tap by text needs Maestro; then the whole batch goes through it, in Maestro's own coordinates.
       if (actions.some((a) => 'tap' in a && typeof a.tap === 'string'))
-        return maestroInline(
-          serial,
-          pkg,
-          actions.map((a) =>
-            'tap' in a
-              ? `tapOn: ${JSON.stringify(a.tap)}`
-              : `swipe:\n    start: "${a.swipe.from.join(',')}"\n    end: "${a.swipe.to.join(',')}"`,
-          ),
-        );
+        return maestroInline(serial, pkg, maestroCommands(actions));
       const { w, h } = await screen();
       for (const a of actions) {
         if ('tap' in a && typeof a.tap !== 'string') await shell(`input tap ${px(a.tap[0], w)} ${px(a.tap[1], h)}`);
