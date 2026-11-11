@@ -16,5 +16,5 @@
     "resolveJsonModule": true,
     "types": ["node", "bun"]
   },
-  "include": ["src/**/*", "test/**/*", "scripts/**/*", "examples/**/*.bench.ts"]
+  "include": ["src/**/*", "test/**/*", "scripts/**/*"]
 }
