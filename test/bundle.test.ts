@@ -45,6 +45,10 @@ test('a module spanning lines keeps its lines; two modules on one line are refus
     ['b', 24],
   ]);
   writeFileSync(join(dir, 'bad.js'), '__d(function(){},0,[]);__d(function(){},1,[]);\n');
-  await expect(readBundle(join(dir, 'bad.js'), join(dir, 'ok.js.map'))).rejects.toThrow(/2 modules but 1/);
+  const refused = await readBundle(join(dir, 'bad.js'), join(dir, 'ok.js.map')).then(
+    () => '',
+    (error: unknown) => String(error),
+  );
+  expect(refused).toMatch(/2 modules but 1/);
   rmSync(dir, { recursive: true, force: true });
 });
