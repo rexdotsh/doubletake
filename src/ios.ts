@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type Device, type Recording, logTap } from './device.ts';
-import { maestroInline, pointArg } from './maestro.ts';
+import { maestroCommands, maestroInline } from './maestro.ts';
 import { run, stop, stream } from './sh.ts';
 import { dig, isRecord } from './util.ts';
 
@@ -143,22 +143,25 @@ function simulator(udid: string, name: string, os: string): Device {
         ['simctl', 'spawn', udid, 'log', 'stream', '--style', 'ndjson', '--level', 'debug', '--predicate', predicate],
         (line) => {
           if (!line.startsWith('{')) return null;
-          const message = dig(JSON.parse(line), 'eventMessage');
-          return typeof message === 'string' ? message : null;
+          const json: unknown = JSON.parse(line);
+          const message = dig(json, 'eventMessage');
+          const pid = dig(json, 'processID');
+          return typeof message === 'string' ? { message, pid: typeof pid === 'number' ? pid : undefined } : null;
         },
       );
     },
     clockOffset: () => Promise.resolve(0),
     async record(path): Promise<Recording> {
       const child = stream('xcrun', ['simctl', 'io', udid, 'recordVideo', '--codec=h264', '--force', path], () => {});
-      const started = new Promise<boolean>((resolve) => {
+      const startedAt = await new Promise<number | undefined>((resolve) => {
         child.stderr?.on('data', (chunk: Buffer) => {
-          if (chunk.toString().includes('Recording started')) resolve(true);
+          if (chunk.toString().includes('Recording started')) resolve(Date.now());
         });
-        setTimeout(() => resolve(false), 5000);
+        setTimeout(() => resolve(undefined), 5000);
       });
-      if (!(await started)) throw new Error('simctl recordVideo did not start within 5 s');
+      if (startedAt === undefined) throw new Error('simctl recordVideo did not start within 5 s');
       return {
+        startedAt,
         async stop() {
           await stop(child);
           return path;
@@ -166,17 +169,6 @@ function simulator(udid: string, name: string, os: string): Device {
       };
     },
     openUrl: async (url) => void (await simctl('openurl', udid, url)),
-    input: (appId, actions) =>
-      maestroInline(
-        udid,
-        appId,
-        actions.map((a) =>
-          'tap' in a
-            ? typeof a.tap === 'string'
-              ? `tapOn: ${JSON.stringify(a.tap)}`
-              : `tapOn:\n    point: ${pointArg(a.tap)}`
-            : `swipe:\n    start: ${pointArg(a.swipe.from)}\n    end: ${pointArg(a.swipe.to)}\n    duration: ${a.swipe.duration}`,
-        ),
-      ),
+    input: (appId, actions) => maestroInline(udid, appId, maestroCommands(actions)),
   };
 }

@@ -1,6 +1,7 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { Action } from './device.ts';
 import { run, which } from './sh.ts';
 
 /** Runs a Maestro flow file on a device. Maestro's own startup (seconds) lands in whatever window holds it. */
@@ -27,6 +28,17 @@ export async function maestroInline(device: string, appId: string, commands: str
 const fmt = (v: number) => (v <= 1 ? `${Math.round(v * 100)}%` : String(Math.round(v)));
 
 /** A point for Maestro: fractions of the screen become percentages, larger numbers stay pixels. */
-export function pointArg(at: [number, number]): string {
+function pointArg(at: [number, number]): string {
   return `"${fmt(at[0])},${fmt(at[1])}"`;
+}
+
+/** Taps and swipes as Maestro commands. */
+export function maestroCommands(actions: readonly Action[]): string[] {
+  return actions.map((a) =>
+    'tap' in a
+      ? typeof a.tap === 'string'
+        ? `tapOn: ${JSON.stringify(a.tap)}`
+        : `tapOn:\n    point: ${pointArg(a.tap)}`
+      : `swipe:\n    start: ${pointArg(a.swipe.from)}\n    end: ${pointArg(a.swipe.to)}\n    duration: ${a.swipe.duration}`,
+  );
 }

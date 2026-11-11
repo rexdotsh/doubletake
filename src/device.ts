@@ -28,6 +28,8 @@ export interface LogTap {
 }
 
 export interface Recording {
+  /** Host clock of the video's first frame, when the platform says it (simctl does; screenrecord does not). */
+  readonly startedAt?: number;
   /** Stops recording and returns the local path of the video. */
   stop(): Promise<string>;
 }
@@ -67,19 +69,19 @@ export class Refusal extends Error {
   }
 }
 
-/** Streams a log command, keeps the SDK's lines (`extract` gives a line's message), and waits on them. */
+/** Streams a log command, keeps the SDK's lines (`extract` gives a line's message and writer), and waits on them. */
 export async function logTap(
   cmd: string,
   args: readonly string[],
-  extract: (line: string) => string | null,
+  extract: (line: string) => { message: string; pid?: number } | null,
 ): Promise<LogTap> {
   const events: SdkEvent[] = [];
   const waiters = new Set<() => void>();
   const child = stream(cmd, args, (line) => {
-    const message = extract(line);
-    const event = message === null ? null : parseSdkLine(message);
+    const got = extract(line);
+    const event = got === null ? null : parseSdkLine(got.message);
     if (!event) return;
-    events.push(event);
+    events.push(got?.pid === undefined ? event : { ...event, pid: got.pid });
     for (const wake of waiters) wake();
   });
   await sleep(LOG_ATTACH_MS);

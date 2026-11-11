@@ -68,17 +68,25 @@ function changed(a: Uint8Array, b: Uint8Array, keep: Uint8Array): boolean {
 
 export type Visual = { first: number; complete: number; frames: number };
 
+export const VIDEO_FPS = FPS;
+
 /**
- * From the first frame that differs from the first one (the launch starting) to the frame after which every
- * frame stays within 1% of the last one (visually complete). Times in ms from the start of the video.
- * `tail` is how long the screen must stay unchanged at the end for the answer to stand.
+ * From the first frame after `from` (ms into the video: the launch command) that differs from the frame at
+ * `from`, to the frame after which every frame stays within 1% of the last one (visually complete). Times in
+ * ms from the start of the video. `tail` is how long the screen must stay unchanged at the end to stand.
  */
-export function visualTimes(frames: readonly Uint8Array[], ignore: readonly Region[] = [], tail = 1000): Visual {
+export function visualTimes(
+  frames: readonly Uint8Array[],
+  ignore: readonly Region[] = [],
+  tail = 1000,
+  from = 0,
+): Visual {
   const keep = mask(ignore);
-  const start = frames[0];
+  const origin = Math.max(0, Math.min(frames.length - 1, Math.round((from * FPS) / 1000)));
+  const start = frames[origin];
   const end = frames.at(-1);
   if (!start || !end) throw new Refusal('NoVideo', 'the recording has no frames');
-  const first = frames.findIndex((f) => changed(f, start, keep));
+  const first = frames.findIndex((f, i) => i >= origin && changed(f, start, keep));
   if (first < 0) throw new Refusal('NoVisualChange', 'the screen never changed in the recording');
   let complete = frames.length - 1;
   while (complete > first && !changed(get(frames, complete - 1), end, keep)) complete--;

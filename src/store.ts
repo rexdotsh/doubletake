@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { Platform } from './metrics.ts';
@@ -22,6 +22,8 @@ export type Series = {
   primary: Comparison;
   secondaries: Comparison[];
   refused: Record<string, string>;
+  /** The metrics the case declared (primary and metrics): the only refusals reports list. */
+  declared?: string[];
   pairs: number;
   stopped: string;
   minutes: number;
@@ -104,4 +106,39 @@ export async function loadExperiment(ref: string): Promise<{ dir: string; experi
   const experiment = await readExperiment(dir);
   if (!experiment) throw new Error(`${join(dir, 'result.json')} is not a doubletake experiment`);
   return { dir, experiment };
+}
+
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Takes the device for one bench at a time across processes (exclusive create); returns the release. Fails
+ * closed: a lock left by a dead process is never taken over automatically, since two takers cannot tell
+ * which of them reclaimed it.
+ */
+export async function lockDevice(device: string): Promise<() => Promise<void>> {
+  const dir = join(home(), 'locks');
+  await mkdir(dir, { recursive: true });
+  const file = join(dir, `${device.replace(/[^\w.-]/g, '_')}.pid`);
+  const mine = String(process.pid);
+  try {
+    await writeFile(file, mine, { flag: 'wx' });
+  } catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
+    const holder = Number(await readFile(file, 'utf8').catch(() => ''));
+    const why =
+      holder && !alive(holder)
+        ? `a stale lock from pid ${holder}, which is gone: remove ${file} if no bench is running`
+        : `in use by pid ${holder || '?'}`;
+    throw new Error(`device ${device} is locked (${why}): one bench per device at a time`, { cause: error });
+  }
+  return async () => {
+    if ((await readFile(file, 'utf8').catch(() => '')) === mine) await rm(file, { force: true });
+  };
 }

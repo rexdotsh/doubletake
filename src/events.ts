@@ -7,12 +7,14 @@
 //   r <t> <bytes>      a request finished
 //   p <t> <ms>         a React commit (profiling builds)
 
-export type SdkEvent =
+/** One SDK line; `pid` is the writing process when the log says it (os_log and logcat do). */
+export type SdkEvent = (
   | { kind: 'start'; t: number; frames: boolean; network: boolean }
   | { kind: 'mark'; t: number; name: string }
   | { kind: 'frame'; t: number; missed: number; late: number }
   | { kind: 'request'; t: number; bytes: number }
-  | { kind: 'commit'; t: number; ms: number };
+  | { kind: 'commit'; t: number; ms: number }
+) & { pid?: number };
 
 export type Counters = {
   dropped: number;
@@ -40,6 +42,11 @@ export function parseSdkLine(text: string): SdkEvent | null {
   if (kind === 'r' && Number.isFinite(x)) return { kind: 'request', t, bytes: x };
   if (kind === 'p' && Number.isFinite(x)) return { kind: 'commit', t, ms: x };
   return null;
+}
+
+/** Lines from process `pid`, or every line when the log does not say which process wrote it. */
+export function ofProcess(events: readonly SdkEvent[], pid: number): SdkEvent[] {
+  return events.filter((e) => e.pid === undefined || e.pid === pid);
 }
 
 /**
