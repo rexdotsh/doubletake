@@ -24,7 +24,7 @@ It is inspired by [strobe](https://github.com/anomalyco/strobe), which does this
 bun add -d doubletake        # or npm i -D doubletake; the CLI runs on Node 22.18+ or Bun
 ```
 
-The machine with the simulator or emulator needs Xcode (`xcrun simctl`) or the Android SDK (`adb`), plus `ffmpeg` for video and [Maestro](https://maestro.mobile.dev) for taps and swipes on iOS. `doubletake status` says what it found.
+The machine with the simulator or emulator needs Xcode (`xcrun simctl`) or the Android SDK (`adb`), plus `ffmpeg` for video, [AXe](https://github.com/cameroncooke/AXe) for taps and swipes on iOS (`brew install cameroncooke/axe/axe`), and [Maestro](https://maestro.mobile.dev) only for `maestro` steps and Android taps by text. `doubletake status` says what it found.
 
 ## A bench file
 
@@ -128,7 +128,7 @@ Swift and Kotlin apps get the same runs and verdicts: copy [`sdk/swift/Doubletak
 - **iOS UI frames.** Hitches and frame times need Instruments; doubletake does not read them yet, and refuses `frames.*` on iOS. JS frames come from the SDK.
 - **Cold starts are process-cold, not disk-cold.** Neither simctl nor an unrooted emulator can drop the OS file cache.
 - **JS hotspots in release builds.** Hermes's sampling profiler is not reachable in a release build; profile a dev build instead.
-- **Taps on iOS go through Maestro**, which takes seconds to start; keep them in `setup` or measure counts (`js.stall`, `net.requests`), not wall time, across them.
+- **Input does not wait for the screen to settle.** iOS taps and swipes go through [AXe](https://github.com/cameroncooke/AXe) and Android ones through `adb input`, in milliseconds each, and return when the gesture ends: follow them with a `wait` (a mark) or a `sleep` where the run must include what they start. A text tap matches an accessibility label exactly on iOS; on Android it goes through Maestro, which takes seconds to start, so keep text taps in `setup`.
 - **Shared CI runners.** Timing verdicts need a machine that runs one bench at a time.
 
 ## License

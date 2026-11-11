@@ -2,7 +2,6 @@ import { mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { type Action, type Device, type Recording, logTap } from './device.ts';
-import { maestroCommands, maestroInline } from './maestro.ts';
 import { run, stop, stream, which } from './sh.ts';
 import { dig, isRecord } from './util.ts';
 
@@ -76,7 +75,7 @@ export async function iosDevice(want?: string): Promise<Device> {
   return simulator(sim.udid, sim.name, sim.runtime, (await which('axe')) ?? undefined);
 }
 
-/** The simulator's screen in points, from AXe's accessibility tree (its application frame). */
+/** The simulator's screen in points, from AXe's accessibility tree (its first element's frame). */
 async function screenPoints(axe: string, udid: string): Promise<{ w: number; h: number }> {
   const tree: unknown = JSON.parse((await run(axe, ['describe-ui', '--udid', udid])).stdout);
   const [w, h] = [dig(tree, 0, 'frame', 'width'), dig(tree, 0, 'frame', 'height')];
@@ -84,39 +83,39 @@ async function screenPoints(axe: string, udid: string): Promise<{ w: number; h: 
   return { w, h };
 }
 
-/** Taps and swipes through AXe (milliseconds each, where Maestro takes seconds to start). */
-async function axeInput(axe: string, udid: string, actions: readonly Action[]): Promise<void> {
-  let screen: { w: number; h: number } | undefined;
-  const pt = async ([x, y]: [number, number]) => {
-    if (x > 1 || y > 1) return [x, y];
-    screen ??= await screenPoints(axe, udid);
-    return [x * screen.w, y * screen.h];
-  };
+/** A coordinate in points: a fraction of the screen, or points already. */
+const axis = (v: number, size: number) => String(Math.round(v <= 1 ? v * size : v));
+
+/**
+ * Taps and swipes through AXe. A text tap waits up to 10 s for an element with that accessibility label (an
+ * exact match). AXe returns when the gesture ends, not when the screen settles: follow it with a `wait` or
+ * `sleep` where the run must include what it starts.
+ */
+async function axeInput(
+  axe: string,
+  udid: string,
+  screen: { w: number; h: number },
+  actions: readonly Action[],
+): Promise<void> {
   for (const a of actions) {
     if ('tap' in a) {
       const at = a.tap;
-      if (typeof at === 'string') {
-        await run(axe, ['tap', '--label', at, '--wait-timeout', '10', '--udid', udid]);
-        continue;
-      }
-      const [x, y] = await pt(at);
-      await run(axe, ['tap', '-x', String(Math.round(x ?? 0)), '-y', String(Math.round(y ?? 0)), '--udid', udid]);
+      if (typeof at === 'string') await run(axe, ['tap', '--label', at, '--wait-timeout', '10', '--udid', udid]);
+      else await run(axe, ['tap', '-x', axis(at[0], screen.w), '-y', axis(at[1], screen.h), '--udid', udid]);
     } else {
-      const [sx, sy] = await pt(a.swipe.from);
-      const [ex, ey] = await pt(a.swipe.to);
-      const coords = [sx, sy, ex, ey].map((v) => String(Math.round(v ?? 0)));
+      const { from, to, duration } = a.swipe;
       await run(axe, [
         'swipe',
         '--start-x',
-        coords[0] ?? '0',
+        axis(from[0], screen.w),
         '--start-y',
-        coords[1] ?? '0',
+        axis(from[1], screen.h),
         '--end-x',
-        coords[2] ?? '0',
+        axis(to[0], screen.w),
         '--end-y',
-        coords[3] ?? '0',
+        axis(to[1], screen.h),
         '--duration',
-        String(a.swipe.duration / 1000),
+        String(duration / 1000),
         '--udid',
         udid,
       ]);
@@ -125,6 +124,7 @@ async function axeInput(axe: string, udid: string, actions: readonly Action[]): 
 }
 
 function simulator(udid: string, name: string, os: string, axe: string | undefined): Device {
+  let screen: { w: number; h: number } | undefined;
   const executables = new Map<string, string>();
   return {
     platform: 'ios',
@@ -132,6 +132,8 @@ function simulator(udid: string, name: string, os: string, axe: string | undefin
     name,
     os,
     async prepare() {
+      // Screen geometry once, before any timed window: AXe works in points.
+      if (axe) screen = await screenPoints(axe, udid);
       await simctl(
         'status_bar',
         udid,
@@ -237,7 +239,10 @@ function simulator(udid: string, name: string, os: string, axe: string | undefin
       };
     },
     openUrl: async (url) => void (await simctl('openurl', udid, url)),
-    input: (appId, actions) =>
-      axe ? axeInput(axe, udid, actions) : maestroInline(udid, appId, maestroCommands(actions)),
+    async input(_appId, actions) {
+      if (!axe) throw new Error('taps and swipes on the iOS Simulator need AXe: brew install cameroncooke/axe/axe');
+      screen ??= await screenPoints(axe, udid);
+      await axeInput(axe, udid, screen, actions);
+    },
   };
 }

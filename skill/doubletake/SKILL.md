@@ -40,7 +40,7 @@ export default {
 ```
 
 - One of `launch`, `run` or `idle` per case. `setup` is untimed; `run` is timed.
-- Steps: `launch`, `terminate`, `{ open }`, `{ wait: 'mark:x' }`, `{ sleep }`, `{ tap }`, `{ swipe }`, `{ scroll }`, `{ maestro: 'flow.yaml' }`, `{ shell }`. iOS taps go through Maestro (seconds each): keep them in `setup`.
+- Steps: `launch`, `terminate`, `{ open }`, `{ wait: 'mark:x' }`, `{ sleep }`, `{ tap }`, `{ swipe }`, `{ scroll }`, `{ maestro: 'flow.yaml' }`, `{ shell }`. iOS taps and swipes go through AXe, Android ones through adb (milliseconds; they do not wait for the screen to settle, so add a `wait` or `sleep`). Android taps by text need Maestro (seconds): keep them in `setup`.
 - Unknown keys and metrics fail with the nearest name.
 
 ## Picking a primary

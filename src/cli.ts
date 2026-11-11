@@ -318,7 +318,8 @@ async function status(): Promise<void> {
     ['python3', '/usr/bin/python3', 'iOS process start times'],
     ['adb', 'adb', 'Android'],
     ['ffmpeg', ffmpegPath(), 'launch.visual and side-by-side video'],
-    ['maestro', 'maestro', 'tap, swipe and maestro steps (required for input on iOS)'],
+    ['axe', 'axe', 'taps and swipes on the iOS Simulator'],
+    ['maestro', 'maestro', 'maestro steps, and Android taps by text'],
   ];
   out(`doubletake ${pkg.version} · ${await hostLine()}`);
   for (const [name, cmd, what] of tools) out(`  ${(await which(cmd)) ? '✓' : '✗'} ${name.padEnd(8)} ${what}`);

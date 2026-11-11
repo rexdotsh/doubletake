@@ -9,7 +9,11 @@ import { isRecord } from './util.ts';
 type Tool = { name: string; description: string; flags: Record<string, string>; positional?: string };
 
 const TOOLS: Tool[] = [
-  { name: 'status', description: 'What this machine can measure: simulators, emulators, ffmpeg, maestro.', flags: {} },
+  {
+    name: 'status',
+    description: 'What this machine can measure: simulators, emulators, ffmpeg, axe, maestro.',
+    flags: {},
+  },
   {
     name: 'check',
     description: 'Run each case of a bench file once on one build: does it work, what does it read?',

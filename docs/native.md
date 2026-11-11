@@ -16,7 +16,7 @@ The seam is the marker protocol (`src/events.ts`): one log line per event, `[dou
 
 - Everything that needs no SDK: `cpu.time`, `cpu.idle`, `memory.*`, `launch.visual`, and on Android `launch.ttid` and `frames.*` from `gfxinfo`.
 - Marks: copy `sdk/swift/Doubletake.swift` or `sdk/kotlin/Doubletake.kt` into the app and call `Doubletake.mark("home")`.
-- Flows: Maestro drives native apps as it drives RN ones.
+- Flows: AXe (iOS) and adb (Android) drive any app; existing Maestro flows run as `maestro` steps.
 - The SwiftUI sample in `examples/swiftui-sample` builds without an Xcode project and runs the same bench as the RN sample.
 
 ## Planned, in order
