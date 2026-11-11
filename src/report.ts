@@ -144,7 +144,9 @@ export function card(e: Experiment): string {
     '- ★ is the primary, declared before the run. Declared secondaries get words only after it decided, at a Bonferroni level (95% across them); `·` is descriptive (95%).',
     ...(refused.length ? [`- Not measured: ${refused.join(', ')}.`] : []),
     ...(e.warnings.length
-      ? [`- ${e.warnings.length} block(s) ran while the host's load rose above half its cores; see result.json.`]
+      ? [
+          `- ${e.warnings.length} block(s) were run again because the host's load rose above half its cores; see result.json.`,
+        ]
       : []),
     '',
     '</details>',

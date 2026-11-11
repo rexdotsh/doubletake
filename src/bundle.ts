@@ -81,12 +81,24 @@ export async function readBundle(bundleFile: string, mapFile: string): Promise<B
   const [code, mapText] = await Promise.all([readFile(bundleFile, 'utf8'), readFile(mapFile, 'utf8')]);
   const lineSources = lineSourcesOf(JSON.parse(mapText), mapFile);
   const modules: Module[] = [];
-  code.split('\n').forEach((line, i) => {
-    if (!line.startsWith('__d(')) return;
-    const id = Number(/,(\d+),\[[\d,]*\](?:,"[^"]*")?\);?\s*$/.exec(line)?.[1] ?? Number.NaN);
-    const source = lineSources[i] ?? '?';
-    modules.push({ id, bytes: Buffer.byteLength(line) + 1, source, ...packageOf(source) });
+  const lines = code.split('\n');
+  // Metro writes one module per line, from column 0; a module spanning lines keeps the lines after it until
+  // the next module or require. Two modules on one line would be misattributed, so refuse that layout.
+  const defined = (code.match(/__d\(/g) ?? []).length;
+  let current: Module | undefined;
+  lines.forEach((line, i) => {
+    if (line.startsWith('__d(')) {
+      const id = Number(/,(\d+),\[[\d,]*\](?:,"[^"]*")?\);?\s*$/.exec(line)?.[1] ?? Number.NaN);
+      const source = lineSources[i] ?? '?';
+      current = { id, bytes: 0, source, ...packageOf(source) };
+      modules.push(current);
+    } else if (line.startsWith('__r(')) current = undefined;
+    if (current) current.bytes += Buffer.byteLength(line) + 1;
   });
+  if (defined !== modules.length)
+    throw new Error(
+      `${bundleFile}: ${defined} modules but ${modules.length} start a line: not a layout doubletake can attribute`,
+    );
   return { bytes: Buffer.byteLength(code), modules };
 }
 

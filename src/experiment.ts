@@ -71,8 +71,24 @@ async function quiet(o: BenchOptions): Promise<number> {
   }
 }
 
+/**
+ * A block on a quiet host. When the load rose above the limit during it, the block is thrown away and run
+ * again once; a second busy block refuses the experiment (a 1-minute average is coarse, so this is a floor).
+ */
 async function block(o: BenchOptions, name: string, c: Case, v: Variant, tag: string): Promise<Block> {
-  const loadBefore = await quiet(o);
+  for (let attempt = 0; ; attempt++) {
+    const loadBefore = await quiet(o);
+    const result = await measureBlock(o, name, c, v, tag);
+    const loadAfter = loadavg()[0] ?? 0;
+    const limit = cpus().length * BUSY_SHARE;
+    if (loadAfter <= limit) return result;
+    const why = `${name} ${tag} ${v.role}: the host's load rose from ${loadBefore.toFixed(1)} to ${loadAfter.toFixed(1)} during the block`;
+    if (attempt > 0) throw new Refusal('Background', `${why}, twice: something else is using the machine`);
+    o.experiment.warnings.push(`${why}; ran it again`);
+  }
+}
+
+async function measureBlock(o: BenchOptions, name: string, c: Case, v: Variant, tag: string): Promise<Block> {
   const sequential = o.base.appId === o.head.appId;
   if (sequential) await install(o, v);
   const tap = await o.device.logs(v.appId);
@@ -103,11 +119,6 @@ async function block(o: BenchOptions, name: string, c: Case, v: Variant, tag: st
     await tap.stop();
     await o.device.terminate(v.appId);
   }
-  const loadAfter = loadavg()[0] ?? 0;
-  if (loadAfter > cpus().length * BUSY_SHARE)
-    o.experiment.warnings.push(
-      `${name} ${tag} ${v.role}: the host's load rose to ${loadAfter.toFixed(1)} during the block (from ${loadBefore.toFixed(1)})`,
-    );
   const values: Record<string, number> = {};
   const varying = new Set<string>();
   const refused: Record<string, string> = {};

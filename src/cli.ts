@@ -39,8 +39,8 @@ const USAGE = `doubletake ${pkg.version}: A/B performance for React Native apps 
   --host "<ssh command>"  run on that machine (e.g. "ssh mac"): builds and bench file go over, results come back
   --host-init "<shell>"   run first on the host (e.g. ". ~/env.sh")
   --video [case]          after the pairs, film one more run per side and put them side by side
-  --side-by-side          iOS: install head under <bundle id>.doubletake so both stay installed (no reinstall
-                          per block; the head's keychain and app groups differ from the real id's)
+  --side-by-side          iOS: install both builds as copies under <bundle id>.doubletake{base,head}, so both stay
+                          installed (no reinstall per block); copies have no entitlements and fresh containers
   --fail-on-regression    exit 6 when a primary is worse (CI)
   --json                  print the experiment record
 
@@ -218,13 +218,27 @@ async function measure(command: 'bench' | 'check', file: string | undefined, fla
   const device = await openDevice(platform, flags.device);
   const [baseLabel, headLabel] = flags.labels?.split(',') ?? [];
   let head = await variant(device, 'head', flags.head, headLabel);
-  const base = command === 'bench' && flags.base ? await variant(device, 'base', flags.base, baseLabel) : head;
+  let base = command === 'bench' && flags.base ? await variant(device, 'base', flags.base, baseLabel) : head;
   const id = flags.id ?? newId('exp');
   const dir = experimentDir(id);
-  if (flags['side-by-side'] && command === 'bench' && base.appId === head.appId && head.artifact) {
+  if (flags['side-by-side'] && command === 'bench' && base.appId === head.appId && base.artifact && head.artifact) {
+    // Both sides get the same treatment: a copy under a new id, its own container, the same signing.
     if (!device.clone) throw new Error('--side-by-side needs a clone of the build under another id: iOS only');
-    const appId = `${head.appId}.doubletake`;
-    head = { ...head, appId, artifact: await device.clone(head.artifact, appId, dir) };
+    const opens = cases.filter((name) =>
+      [...(loaded.cases[name]?.setup ?? []), ...(loaded.cases[name]?.run ?? [])].some(
+        (s) => typeof s === 'object' && 'open' in s,
+      ),
+    );
+    if (opens.length)
+      throw new Error(
+        `--side-by-side: both copies claim the same URL schemes, so deep links (${opens.join(', ')}) could open either`,
+      );
+    const copy = async (v: Variant, suffix: string) => ({
+      ...v,
+      appId: `${v.appId}.doubletake${suffix}`,
+      artifact: await device.clone?.(v.artifact ?? '', `${v.appId}.doubletake${suffix}`, join(dir, suffix)),
+    });
+    [base, head] = await Promise.all([copy(base, 'base'), copy(head, 'head')]);
   }
   const pairs = flags.pairs === undefined || flags.pairs === 'auto' ? 'auto' : (int(flags.pairs, 'pairs') ?? 0);
   const runs = int(flags.runs, 'runs');

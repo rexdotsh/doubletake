@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { type Device, type Recording, logTap } from './device.ts';
@@ -102,9 +102,16 @@ function simulator(udid: string, name: string, os: string): Device {
     },
     appId: (app) => plist(app, 'CFBundleIdentifier'),
     async clone(app, appId, dir) {
-      const copy = join(dir, 'clone', basename(app));
+      const extensions = await Promise.all(
+        ['PlugIns', 'Extensions'].map((d) => readdir(join(app, d)).catch((): string[] => [])),
+      );
+      if (extensions.flat().length)
+        throw new Error(
+          `${basename(app)} embeds app extensions, whose ids must share the app's prefix: --side-by-side cannot clone it`,
+        );
+      const copy = join(dir, basename(app));
       await rm(copy, { recursive: true, force: true });
-      await mkdir(join(dir, 'clone'), { recursive: true });
+      await mkdir(dir, { recursive: true });
       await run('ditto', [app, copy]);
       await run('plutil', ['-replace', 'CFBundleIdentifier', '-string', appId, join(copy, 'Info.plist')]);
       // Ad-hoc and without entitlements: the simulator refuses an ad-hoc app that claims store entitlements.
