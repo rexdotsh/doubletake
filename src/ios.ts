@@ -132,8 +132,6 @@ function simulator(udid: string, name: string, os: string, axe: string | undefin
     name,
     os,
     async prepare() {
-      // Screen geometry once, before any timed window: AXe works in points.
-      if (axe) screen = await screenPoints(axe, udid);
       await simctl(
         'status_bar',
         udid,
@@ -239,6 +237,10 @@ function simulator(udid: string, name: string, os: string, axe: string | undefin
       };
     },
     openUrl: async (url) => void (await simctl('openurl', udid, url)),
+    async prepareInput() {
+      // After setup and before the window: the app on screen sets the orientation AXe's points follow.
+      if (axe) screen = await screenPoints(axe, udid);
+    },
     async input(_appId, actions) {
       if (!axe) throw new Error('taps and swipes on the iOS Simulator need AXe: brew install cameroncooke/axe/axe');
       screen ??= await screenPoints(axe, udid);
