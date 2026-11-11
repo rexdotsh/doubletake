@@ -47,7 +47,6 @@ async function install(o: BenchOptions, v: Variant): Promise<void> {
   else if (!(await o.device.isInstalled(v.appId))) throw new Error(`${v.appId} is not installed on ${o.device.name}`);
 }
 
-/** One fresh block: the variant's app, `warmup` discarded runs, then `runs` measured ones (median per metric). */
 /** Load above this share of the host's cores is other work competing with the app for CPU. */
 const BUSY_SHARE = 0.5;
 const QUIET_WAIT_MS = 30 * 60_000;
@@ -87,6 +86,7 @@ async function block(o: BenchOptions, name: string, c: Case, v: Variant, tag: st
   return result;
 }
 
+/** One fresh block: the variant's app, `warmup` discarded runs, then `runs` measured ones (median per metric). */
 async function measureBlock(o: BenchOptions, name: string, c: Case, v: Variant, tag: string): Promise<Block> {
   const sequential = o.base.appId === o.head.appId;
   if (sequential) await install(o, v);
@@ -319,13 +319,20 @@ async function check(o: Omit<BenchOptions, 'base' | 'pairs' | 'warmup'>): Promis
   await o.device.prepare();
   for (const name of o.cases) {
     const c = caseOf(o.bench, name);
-    const b = await block(
+    // A check decides nothing, so a busy host is a warning on its values, never a wait or a refusal.
+    const load = loadavg()[0] ?? 0;
+    const b = await measureBlock(
       { ...o, base: o.head, pairs: 1, warmup: 0, runs: 1 },
       name,
       { ...c, runs: 1 },
       o.head,
       'check',
     );
+    const busiest = Math.max(load, loadavg()[0] ?? 0);
+    if (busiest > cpus().length * BUSY_SHARE)
+      o.experiment.warnings.push(
+        `${name}: the host's load was ${busiest.toFixed(1)} (over half its ${cpus().length} cores): values from a busy machine`,
+      );
     o.experiment.checks.push({ case: name, values: b.values, refused: b.refused });
     o.log(
       `${name}: ${Object.keys(b.refused).includes(c.primary) ? `refused: ${b.refused[c.primary]}` : `${c.primary} ${fmt(b.values[c.primary])}`}`,
