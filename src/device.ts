@@ -42,6 +42,8 @@ export interface Device {
   /** Status bar, animations: whatever makes runs and videos comparable. */
   prepare(): Promise<void>;
   appId(artifact: string): Promise<string>;
+  /** A copy of a build under another bundle id, so both sides stay installed (iOS only). */
+  clone?(artifact: string, appId: string, dir: string): Promise<string>;
   install(artifact: string): Promise<void>;
   isInstalled(appId: string): Promise<boolean>;
   terminate(appId: string): Promise<void>;

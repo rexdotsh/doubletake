@@ -1,6 +1,6 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { type Device, type Recording, logTap } from './device.ts';
 import { maestroCommands, maestroInline } from './maestro.ts';
 import { run, stop, stream } from './sh.ts';
@@ -101,6 +101,16 @@ function simulator(udid: string, name: string, os: string): Device {
       );
     },
     appId: (app) => plist(app, 'CFBundleIdentifier'),
+    async clone(app, appId, dir) {
+      const copy = join(dir, 'clone', basename(app));
+      await rm(copy, { recursive: true, force: true });
+      await mkdir(join(dir, 'clone'), { recursive: true });
+      await run('ditto', [app, copy]);
+      await run('plutil', ['-replace', 'CFBundleIdentifier', '-string', appId, join(copy, 'Info.plist')]);
+      // Ad-hoc and without entitlements: the simulator refuses an ad-hoc app that claims store entitlements.
+      await run('codesign', ['--force', '--sign', '-', '--timestamp=none', copy]);
+      return copy;
+    },
     async install(app) {
       await simctl('install', udid, app);
       executables.set(await plist(app, 'CFBundleIdentifier'), await plist(app, 'CFBundleExecutable'));

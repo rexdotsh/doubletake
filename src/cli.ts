@@ -39,6 +39,8 @@ const USAGE = `doubletake ${pkg.version}: A/B performance for React Native apps 
   --host "<ssh command>"  run on that machine (e.g. "ssh mac"): builds and bench file go over, results come back
   --host-init "<shell>"   run first on the host (e.g. ". ~/env.sh")
   --video [case]          after the pairs, film one more run per side and put them side by side
+  --side-by-side          iOS: install head under <bundle id>.doubletake so both stay installed (no reinstall
+                          per block; the head's keychain and app groups differ from the real id's)
   --fail-on-regression    exit 6 when a primary is worse (CI)
   --json                  print the experiment record
 
@@ -59,6 +61,7 @@ type Flags = {
   'host-init'?: string;
   id?: string;
   video?: string;
+  'side-by-side'?: boolean;
   'fail-on-regression'?: boolean;
   json?: boolean;
   format?: string;
@@ -82,6 +85,7 @@ const OPTIONS = {
   'host-init': { type: 'string' },
   id: { type: 'string' },
   video: { type: 'string' },
+  'side-by-side': { type: 'boolean' },
   'fail-on-regression': { type: 'boolean' },
   json: { type: 'boolean' },
   format: { type: 'string' },
@@ -194,6 +198,7 @@ async function remote(command: 'bench' | 'check', file: string, ssh: string, fla
       ...(flags.case ?? []).flatMap((c) => ['--case', c]),
       ...passthrough,
       ...(flags['fail-on-regression'] ? ['--fail-on-regression'] : []),
+      ...(flags['side-by-side'] ? ['--side-by-side'] : []),
     ],
   });
   if (!fetched) return;
@@ -212,10 +217,15 @@ async function measure(command: 'bench' | 'check', file: string | undefined, fla
   const platform = platformOf(flags, [flags.base, flags.head]);
   const device = await openDevice(platform, flags.device);
   const [baseLabel, headLabel] = flags.labels?.split(',') ?? [];
-  const head = await variant(device, 'head', flags.head, headLabel);
+  let head = await variant(device, 'head', flags.head, headLabel);
   const base = command === 'bench' && flags.base ? await variant(device, 'base', flags.base, baseLabel) : head;
   const id = flags.id ?? newId('exp');
   const dir = experimentDir(id);
+  if (flags['side-by-side'] && command === 'bench' && base.appId === head.appId && head.artifact) {
+    if (!device.clone) throw new Error('--side-by-side needs a clone of the build under another id: iOS only');
+    const appId = `${head.appId}.doubletake`;
+    head = { ...head, appId, artifact: await device.clone(head.artifact, appId, dir) };
+  }
   const pairs = flags.pairs === undefined || flags.pairs === 'auto' ? 'auto' : (int(flags.pairs, 'pairs') ?? 0);
   const runs = int(flags.runs, 'runs');
   const warmup = int(flags.warmup, 'warmup') ?? 1;
