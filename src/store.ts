@@ -133,7 +133,9 @@ export async function lockDevice(device: string): Promise<() => Promise<void>> {
       if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
       const holder = Number(await readFile(file, 'utf8').catch(() => ''));
       if (holder && alive(holder))
-        throw new Error(`device ${device} is in use by doubletake (pid ${holder}): one bench per device at a time`);
+        throw new Error(`device ${device} is in use by doubletake (pid ${holder}): one bench per device at a time`, {
+          cause: error,
+        });
       // A dead holder's lock: remove it by renaming (atomic), so two takers cannot both delete and create.
       await rename(file, `${file}.stale-${mine}`).catch(() => undefined);
       await rm(`${file}.stale-${mine}`, { force: true });
