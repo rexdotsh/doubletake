@@ -83,3 +83,12 @@ test('app code groups below a root both bundles share', () => {
   groupAppCode(head, root);
   expect(head.modules.map((m) => m.pkg)).toEqual(['(app) components', '(app) screens']);
 });
+
+test('a mapping-less section spanning two modules names neither', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'doubletake-'));
+  writeFileSync(join(dir, 'c.js'), '__d(function(){},0,[]);\n__d(function(){},1,[]);\n');
+  writeFileSync(join(dir, 'c.js.map'), JSON.stringify({ version: 3, sections: [section(0, 'locales/en.json', '')] }));
+  const stats = await readBundle(join(dir, 'c.js'), join(dir, 'c.js.map'));
+  expect(stats.modules.map((m) => m.source)).toEqual(['(no source map)', '(no source map)']);
+  rmSync(dir, { recursive: true, force: true });
+});
