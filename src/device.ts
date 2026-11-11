@@ -45,6 +45,7 @@ export interface Device {
   /** A copy of a build under another bundle id, so both sides stay installed (iOS only). */
   clone?(artifact: string, appId: string, dir: string): Promise<string>;
   install(artifact: string): Promise<void>;
+  uninstall(appId: string): Promise<void>;
   isInstalled(appId: string): Promise<boolean>;
   terminate(appId: string): Promise<void>;
   launch(appId: string): Promise<Launched>;

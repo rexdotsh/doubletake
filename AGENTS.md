@@ -59,7 +59,9 @@ Test what would mislead a user: statistics (A/A false positives, interval covera
 
 ## Privacy
 
-This repository is public. It must never contain anything that identifies a person, a device, a lab or a private app: no hostnames, IPs, bundle ids of private apps, tokens or account names. Results quoted in the README name only public software.
+This repository is public. It must never contain anything that identifies a person, a device, a lab or a private app: no hostnames, IPs, bundle ids of private apps, tokens or account names. Results quoted in the README name only public software; a private app is described generically ("a production React Native app: Expo, Hermes, a 24 MB bundle").
+
+`bun scripts/check-terms.ts` (CI, and the pre-push hook after `git config core.hooksPath scripts/hooks`) fails on terms this repo must not name, in tracked files, commit messages and ref names. The terms are stored as hashes; ask the owner for the list.
 
 ## Workflow
 

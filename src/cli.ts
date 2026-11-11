@@ -239,6 +239,8 @@ async function measure(command: 'bench' | 'check', file: string | undefined, fla
       artifact: await device.clone?.(v.artifact ?? '', `${v.appId}.doubletake${suffix}`, join(dir, suffix)),
     });
     [base, head] = await Promise.all([copy(base, 'base'), copy(head, 'head')]);
+    // Fresh containers: an earlier experiment's copies keep their data across installs.
+    for (const v of [base, head]) await device.uninstall(v.appId);
   }
   const pairs = flags.pairs === undefined || flags.pairs === 'auto' ? 'auto' : (int(flags.pairs, 'pairs') ?? 0);
   const runs = int(flags.runs, 'runs');

@@ -122,6 +122,9 @@ function simulator(udid: string, name: string, os: string): Device {
       await simctl('install', udid, app);
       executables.set(await plist(app, 'CFBundleIdentifier'), await plist(app, 'CFBundleExecutable'));
     },
+    async uninstall(appId) {
+      await run('xcrun', ['simctl', 'uninstall', udid, appId], { check: false });
+    },
     async isInstalled(appId) {
       return (await run('xcrun', ['simctl', 'get_app_container', udid, appId], { check: false })).code === 0;
     },
