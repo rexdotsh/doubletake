@@ -113,6 +113,16 @@ function row(s: Series, c: Comparison, primary: boolean): string {
 
 /** The markdown PR card: a table per experiment, the method folded away, delimited so it can be replaced. */
 export function card(e: Experiment): string {
+  if (e.kind === 'check')
+    return [
+      `<!-- doubletake:${e.id} begin -->`,
+      `### doubletake check (one run per case, no verdict): ${sideLabels(e)[1]}`,
+      '',
+      '```',
+      summary(e),
+      '```',
+      `<!-- doubletake:${e.id} end -->`,
+    ].join('\n');
   const [base, head] = sideLabels(e);
   const lead = e.series.map((s) => `**${s.case}**: ${headline(s)} (${s.primary.metric})`).join(' · ');
   const refused = e.series.flatMap((s) =>
@@ -143,11 +153,7 @@ export function card(e: Experiment): string {
     `- Change: mean of the paired log ratios (or differences), with a bootstrap interval (10,000 resamples, expanded percentile) at ${plan.pairs === 'auto' ? '98.42% at each planned look (8, 12, 18, 26, 40 pairs)' : '95%'} for the primary; a direction also needs the signed-rank test to agree.`,
     '- ★ is the primary, declared before the run. Declared secondaries get words only after it decided, at a Bonferroni level (95% across them); `·` is descriptive (95%).',
     ...(refused.length ? [`- Not measured: ${refused.join(', ')}.`] : []),
-    ...(e.warnings.length
-      ? [
-          `- ${e.warnings.length} block(s) were run again because the host's load rose above half its cores; see result.json.`,
-        ]
-      : []),
+    ...e.warnings.map((w) => `- Warning: ${w}.`),
     '',
     '</details>',
     `<!-- doubletake:${e.id} end -->`,
