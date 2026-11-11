@@ -156,8 +156,10 @@ function device(serial: string, adb: Adb, shell: (cmd: string) => Promise<string
     },
     logs: () =>
       logTap('adb', ['-s', serial, 'logcat', '-v', 'epoch', '-T', '1'], (line) => {
+        // -v epoch: "<seconds.ms>  <pid>  <tid> <level> <tag>: <message>"
         const at = line.indexOf('[doubletake] ');
-        return at < 0 ? null : line.slice(at);
+        const pid = Number(/^\s*\d+\.\d+\s+(\d+)/.exec(line)?.[1]);
+        return at < 0 ? null : { message: line.slice(at), pid: Number.isFinite(pid) ? pid : undefined };
       }),
     clockOffset: () => clockOffset(shell),
     async record(path): Promise<Recording> {

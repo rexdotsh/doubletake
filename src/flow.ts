@@ -65,7 +65,12 @@ export async function runSteps(steps: readonly Step[], state: FlowState): Promis
     else if ('open' in step) await act(() => state.device.openUrl(step.open));
     else if ('wait' in step) {
       const name = step.wait.slice('mark:'.length);
-      const match = (e: SdkEvent) => e.kind === 'mark' && e.name === name && !state.consumed.has(e);
+      const pid = state.launched?.pid;
+      const match = (e: SdkEvent) =>
+        e.kind === 'mark' &&
+        e.name === name &&
+        !state.consumed.has(e) &&
+        (e.pid === undefined || pid === undefined || e.pid === pid);
       state.consumed.add(await state.tap.waitFor(match, state.since, step.timeout ? ms(step.timeout) : 30_000));
     } else if ('sleep' in step) await sleep(ms(step.sleep));
     else if ('maestro' in step) await act(() => maestro(state.device.id, resolve(state.dir, step.maestro), step.env));

@@ -35,7 +35,8 @@ function caseOf(bench: Bench, name: string): Case {
   return c;
 }
 
-type Block = { values: Record<string, number>; refused: Record<string, string> };
+/** A block's median per metric; `varying` names counts whose runs disagreed (never compared exactly). */
+type Block = { values: Record<string, number>; refused: Record<string, string>; varying: Set<string> };
 
 const DEFAULT_BOUND = 0.02;
 
@@ -77,17 +78,19 @@ async function block(o: BenchOptions, name: string, c: Case, v: Variant, tag: st
     await o.device.terminate(v.appId);
   }
   const values: Record<string, number> = {};
+  const varying = new Set<string>();
   const refused: Record<string, string> = {};
   const names = new Set(runs.flatMap((r) => [...Object.keys(r.values), ...Object.keys(r.refused)]));
   for (const metric of names) {
     const got = runs.map((r) => r.values[metric]).filter((x): x is number => x !== undefined);
     if (got.length === runs.length) values[metric] = median(got);
+    if (new Set(got).size > 1) varying.add(metric);
     else
       refused[metric] =
         runs.map((r) => r.refused[metric]).find(Boolean) ??
         `missing in ${runs.length - got.length} of ${runs.length} runs`;
   }
-  return { values, refused };
+  return { values, refused, varying };
 }
 
 function comparisonOf(metric: string, pairs: [Block, Block][], level: number, bound: number): Comparison | null {
@@ -98,7 +101,14 @@ function comparisonOf(metric: string, pairs: [Block, Block][], level: number, bo
   return compare(
     usable.map(([b]) => b.values[metric] ?? Number.NaN),
     usable.map(([, h]) => h.values[metric] ?? Number.NaN),
-    { metric, better: info.better, ratio: !isCount(metric), count: isCount(metric), level, bound },
+    {
+      metric,
+      better: info.better,
+      ratio: !isCount(metric),
+      count: isCount(metric) && usable.every(([b, h]) => !b.varying.has(metric) && !h.varying.has(metric)),
+      level,
+      bound,
+    },
   );
 }
 

@@ -143,8 +143,10 @@ function simulator(udid: string, name: string, os: string): Device {
         ['simctl', 'spawn', udid, 'log', 'stream', '--style', 'ndjson', '--level', 'debug', '--predicate', predicate],
         (line) => {
           if (!line.startsWith('{')) return null;
-          const message = dig(JSON.parse(line), 'eventMessage');
-          return typeof message === 'string' ? message : null;
+          const json: unknown = JSON.parse(line);
+          const message = dig(json, 'eventMessage');
+          const pid = dig(json, 'processID');
+          return typeof message === 'string' ? { message, pid: typeof pid === 'number' ? pid : undefined } : null;
         },
       );
     },

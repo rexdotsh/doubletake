@@ -8,6 +8,7 @@ import type { Device } from './device.ts';
 import { Refusal } from './device.ts';
 import { androidDevice } from './android.ts';
 import { runBench, runCheck } from './experiment.ts';
+import { serve } from './mcp.ts';
 import { iosDevice, listSimulators } from './ios.ts';
 import type { Platform } from './metrics.ts';
 import { type Host, runRemote, sendArtifact } from './remote.ts';
@@ -22,6 +23,7 @@ const USAGE = `doubletake ${pkg.version}: A/B performance for React Native apps 
   doubletake check <file> --head <app>                each case once: does it work, what does it read?
   doubletake report [exp|latest] [--format text|md|json] [--comment <pr> [--repo owner/name]]
   doubletake status                                   what this machine can measure
+  doubletake mcp                                      an MCP server (stdio) with the same commands as tools
 
   <app>     a .app (iOS Simulator) or .apk (Android) build, installed:<bundle id>, or with --host,
             host:<path> for a build already on that machine
@@ -35,7 +37,10 @@ const USAGE = `doubletake ${pkg.version}: A/B performance for React Native apps 
   --host "<ssh command>"  run on that machine (e.g. "ssh mac"): builds and bench file go over, results come back
   --host-init "<shell>"   run first on the host (e.g. ". ~/env.sh")
   --video [case]          after the pairs, film one more run per side and put them side by side
+  --fail-on-regression    exit 6 when a primary is worse (CI)
   --json                  print the experiment record
+
+  exit codes: 0 done · 1 error · 4 a primary was refused · 5 not every primary decided · 6 regression
 `;
 
 type Flags = {
@@ -52,6 +57,7 @@ type Flags = {
   'host-init'?: string;
   id?: string;
   video?: string;
+  'fail-on-regression'?: boolean;
   json?: boolean;
   format?: string;
   comment?: string;
@@ -74,6 +80,7 @@ const OPTIONS = {
   'host-init': { type: 'string' },
   id: { type: 'string' },
   video: { type: 'string' },
+  'fail-on-regression': { type: 'boolean' },
   json: { type: 'boolean' },
   format: { type: 'string' },
   comment: { type: 'string' },
@@ -184,6 +191,7 @@ async function remote(command: 'bench' | 'check', file: string, ssh: string, fla
       platform,
       ...(flags.case ?? []).flatMap((c) => ['--case', c]),
       ...passthrough,
+      ...(flags['fail-on-regression'] ? ['--fail-on-regression'] : []),
     ],
   });
   if (!fetched) return;
@@ -240,7 +248,10 @@ async function measure(command: 'bench' | 'check', file: string | undefined, fla
       ? await runBench({ ...common, base, pairs, warmup, video: flags.video })
       : await runCheck(common);
   out(flags.json ? JSON.stringify(done, null, 2) : summary(done));
-  if (command === 'bench' && !done.decided) process.exitCode = 5;
+  if (done.checks.some((c) => c.refused[loaded.cases[c.case]?.primary ?? ''])) process.exitCode = 4;
+  else if (flags['fail-on-regression'] && done.series.some((s) => s.primary.verdict_kind === 'worse'))
+    process.exitCode = 6;
+  else if (command === 'bench' && !done.decided) process.exitCode = 5;
 }
 
 async function report(ref: string | undefined, flags: Flags): Promise<void> {
@@ -291,6 +302,7 @@ async function main(): Promise<void> {
   if (command === 'bench' || command === 'check') return measure(command, arg, flags);
   if (command === 'report') return report(arg, flags);
   if (command === 'status') return status();
+  if (command === 'mcp') return serve();
   throw new Error(`unknown command ${command}\n\n${USAGE}`);
 }
 

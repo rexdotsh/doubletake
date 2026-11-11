@@ -2,7 +2,7 @@ import type { Bench, Case } from './bench.ts';
 import { caseKind, ms } from './bench.ts';
 import type { Device, LogTap, Recording } from './device.ts';
 import { Refusal } from './device.ts';
-import { countersIn, marksIn } from './events.ts';
+import { countersIn, marksIn, ofProcess } from './events.ts';
 import { type FlowState, launch, runSteps } from './flow.ts';
 import { sleep } from './sh.ts';
 import { VIDEO_FPS, decodeFrames, visualTimes } from './visual.ts';
@@ -11,7 +11,7 @@ type RunValues = Record<string, number>;
 /** A run's recording, if filmed, and when its action began (host clock). */
 type Filmed = { recording?: Recording; action: number };
 /** A measured window and the start of the app process in it, device clock. */
-type Window = { from: number; to: number; launched: number };
+type Window = { from: number; to: number; launched: number; pid: number };
 export type RunResult = {
   values: RunValues;
   /** Metrics the run could not give, with the reason. */
@@ -48,8 +48,9 @@ function refuse(refused: Record<string, string>, metrics: readonly string[], why
 
 /** SDK counters for a window; families the app did not turn on are refused, never zero. */
 function addSdk(values: RunValues, refused: Record<string, string>, ctx: RunContext, window: Window): void {
-  for (const [name, at] of marksIn(ctx.tap.events, window.from, window.to)) values[`mark.${name}`] = at - window.from;
-  const got = countersIn(ctx.tap.events, window.from, window.to, window.launched);
+  const events = ofProcess(ctx.tap.events, window.pid);
+  for (const [name, at] of marksIn(events, window.from, window.to)) values[`mark.${name}`] = at - window.from;
+  const got = countersIn(events, window.from, window.to, window.launched);
   if (!got) {
     refuse(
       refused,
@@ -130,7 +131,7 @@ async function launchRun(
   const until = c.launch?.until?.slice('mark:'.length);
   if (until) {
     const mark = await ctx.tap.waitFor(
-      (e) => e.kind === 'mark' && e.name === until,
+      (e) => e.kind === 'mark' && e.name === until && (e.pid === undefined || e.pid === launched.pid),
       start,
       ms(c.launch?.timeout ?? '30s'),
     );
@@ -141,7 +142,7 @@ async function launchRun(
   const end = Date.now() + ctx.offset;
   await sleep(DRAIN_MS);
   await addMemory(values, ctx, launched.pid);
-  addSdk(values, refused, ctx, { from: start, to: end, launched: start });
+  addSdk(values, refused, ctx, { from: start, to: end, launched: start, pid: launched.pid });
   refuse(refused, UI_FRAME_METRICS, 'NotForCase: UI frame counts are for run cases');
   return { recording, action: launched.t0 };
 }
@@ -178,7 +179,8 @@ async function windowRun(
     const frames = await device.frames.read(appId);
     values['frames.total'] = frames.total;
     values['frames.janky'] = frames.janky;
-    values['frames.janky.pct'] = frames.total ? (100 * frames.janky) / frames.total : 0;
+    if (frames.total > 0) values['frames.janky.pct'] = (100 * frames.janky) / frames.total;
+    else refused['frames.janky.pct'] = 'NoFrames: the app rendered no frames in the run';
     values['frames.p90'] = frames.p90;
   } else
     refuse(refused, UI_FRAME_METRICS, 'NotOnThisPlatform: no UI frame counts on the iOS Simulator without Instruments');
@@ -186,6 +188,7 @@ async function windowRun(
     from: start + ctx.offset,
     to: end + ctx.offset,
     launched: (state.launched?.t0 ?? 0) + ctx.offset,
+    pid,
   });
   return { recording, action: start };
 }

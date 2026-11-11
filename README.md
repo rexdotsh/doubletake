@@ -1,6 +1,8 @@
 # doubletake
 
-Did this branch make the app faster? doubletake answers that for React Native apps (and any iOS or Android app that writes its log lines) on the iOS Simulator and the Android Emulator: it installs two builds, runs them in alternating pairs, and gives a verdict with an interval instead of a single number from one launch.
+Compare two mobile builds with repeatable journeys, paired measurements, and evidence you can review. React Native first; native apps work through the same log lines today, and native measurement integrations (XCTest metrics, Macrobenchmark, Perfetto) are planned.
+
+doubletake installs two builds on the iOS Simulator or the Android Emulator, runs them in alternating pairs, and gives a verdict with an interval instead of a single number from one launch. It is a runner and a referee, not a profiler: it tells you whether head beat base, by how much, and how sure it is.
 
 ```
 $ doubletake bench perf/app.bench.ts --base before.app --head after.app
@@ -81,9 +83,9 @@ The SDK has no dependencies and no timers: each event is one log line written wh
 ## How a verdict is made
 
 - Each side gets one discarded warm-up block, then pairs alternate base, head and head, base. A block installs the build (when both share a bundle id), does one discarded run, then 3 measured runs; the block's value is their median.
-- Per pair: the log ratio head/base (or the difference for counts and zeros). The change is their mean, with a bootstrap interval (10,000 resamples, expanded percentile for small samples). A direction also needs the Wilcoxon signed-rank test to agree; that keeps A/A false calls under 5% with heavy-tailed noise (6.3% without it, in the test suite's simulations).
+- Per pair: the log ratio head/base (or the difference for counts and zeros). The change is their mean, with a bootstrap interval (10,000 resamples, expanded percentile for small samples). A direction also needs the Wilcoxon signed-rank test to agree. In 2,000 simulated A/A experiments per row (fixed 6 to 20 pairs, normal and t3 noise at σ 3%) that gate brought false calls from up to 6.4% down to 2.6–4.3%; the sequential looks are simulated in the test suite too. This is checked by simulation, not proven: say so when you quote a borderline result.
 - `--pairs auto` (the default) looks at 8, 12, 18, 26 and 40 pairs at 98.42% each (Pocock), and stops at the first verdict. Fewer than 6 pairs never decide.
-- Verdicts: `faster`/`slower` (or `less`/`more`, `fewer`/`more`), `same (±2%)`, `unclear`, `underpowered (~N pairs needed)`. Stable counts compare exactly.
+- Verdicts: `faster`/`slower` (or `less`/`more`, `fewer`/`more`), `same (±2%)`, `unclear`, `underpowered (~N pairs needed)`. A count that every run read the same compares exactly.
 - Declared secondaries get words only after the primary decided, at a Bonferroni level; the rest are descriptive (`·`).
 
 ## Commands
@@ -93,7 +95,10 @@ doubletake bench <file> --base <app> --head <app> [--case name] [--pairs auto|N]
 doubletake check <file> --head <app>                # each case once: does it work, what does it read?
 doubletake report [exp|latest] [--format text|md|json] [--comment <pr> [--repo owner/name]]
 doubletake status
+doubletake mcp                                      # the same commands as MCP tools (stdio)
 ```
+
+Exit codes: 0 done, 1 error, 4 a primary was refused, 5 not every primary decided, 6 a primary got worse (with `--fail-on-regression`).
 
 - `<app>` is a `.app` built for the simulator, an `.apk`, or `installed:<bundle id>`.
 - `--host "ssh mac" --host-init ". ~/env.sh"` runs the whole bench on that machine: the CLI, the bench folder and the builds go over (builds once per content hash), the experiment comes back. Timestamps never cross SSH. `host:<path>` names a build already there.
@@ -101,6 +106,13 @@ doubletake status
 - `report --format md` is the PR card; `--comment <pr>` posts it with `gh pr comment`, attaching the video.
 
 Experiments live in `~/.doubletake/experiments/<id>/`: `result.json` (strobe-shaped: `id`, `kind`, `variants`, `series[].primary` with `verdict_kind`, `lo`, `hi`, `needed_pairs`), `runs.ndjson` (every run, warm-ups included) and videos.
+
+## Where it fits
+
+- [Reassure](https://github.com/callstack/reassure) catches component render regressions in Jest; doubletake measures the whole app on a simulator. Use both.
+- [Flashlight](https://github.com/bamlab/flashlight) scores Android app performance (RN or native) on a device; doubletake A/Bs two builds on iOS and Android with a verdict.
+- [Jetpack Macrobenchmark](https://developer.android.com/topic/performance/benchmarking/macrobenchmark-overview) and XCTest's [`XCTApplicationLaunchMetric`](https://developer.apple.com/documentation/xctest/xctapplicationlaunchmetric) are the platforms' own measurement harnesses, with compilation control and signposts. doubletake does not replace them; reading their raw iterations as a backend is planned.
+- [strobe](https://github.com/anomalyco/strobe) is the same idea for web pages, Electron and desktop apps.
 
 ## What it can't do
 
