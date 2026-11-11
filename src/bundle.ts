@@ -58,16 +58,29 @@ export function packageOf(source: string): { pkg: string; version: string } {
   return { pkg, version: store?.[2] ?? '' };
 }
 
+/** A single-source section whose mappings name no source: it owns the module in [line, end) if that is the only one. */
+type Guess = { line: number; end: number; source: string };
+
 /** The source of each generated line, from a plain map or an indexed one (Metro and Expo write sections). */
-function lineSourcesOf(map: unknown, file: string): (string | undefined)[] {
+function lineSourcesOf(map: unknown, file: string, guesses: Guess[] = []): (string | undefined)[] {
   const sections = dig(map, 'sections');
   if (Array.isArray(sections)) {
     const out: (string | undefined)[] = [];
-    for (const section of sections) {
+    sections.forEach((section: unknown, i) => {
       const line = dig(section, 'offset', 'line');
-      const lines = lineSourcesOf(dig(section, 'map'), file);
-      if (typeof line === 'number') lines.forEach((source, i) => (out[line + i] ??= source));
-    }
+      if (typeof line !== 'number') return;
+      const own = lineSourcesOf(dig(section, 'map'), file);
+      own.forEach((source, j) => (out[line + j] ??= source));
+      // Metro's JSON and asset modules come as a section with one source and no segment that names it.
+      const sources = dig(section, 'map', 'sources');
+      const next = dig(sections[i + 1], 'offset', 'line');
+      if (Array.isArray(sources) && sources.length === 1 && own.every((source) => source === undefined))
+        guesses.push({
+          line,
+          end: typeof next === 'number' ? next : Number.POSITIVE_INFINITY,
+          source: String(sources[0]),
+        });
+    });
     return out;
   }
   const sources = dig(map, 'sources');
@@ -79,9 +92,14 @@ function lineSourcesOf(map: unknown, file: string): (string | undefined)[] {
 
 export async function readBundle(bundleFile: string, mapFile: string): Promise<BundleStats> {
   const [code, mapText] = await Promise.all([readFile(bundleFile, 'utf8'), readFile(mapFile, 'utf8')]);
-  const lineSources = lineSourcesOf(JSON.parse(mapText), mapFile);
-  const modules: Module[] = [];
+  const guesses: Guess[] = [];
+  const lineSources = lineSourcesOf(JSON.parse(mapText), mapFile, guesses);
   const lines = code.split('\n');
+  for (const g of guesses) {
+    const starts = lines.slice(g.line, Math.min(g.end, lines.length)).filter((l) => l.startsWith('__d(')).length;
+    if (starts === 1 && lines[g.line]?.startsWith('__d(')) lineSources[g.line] ??= g.source;
+  }
+  const modules: Module[] = [];
   // Metro writes one module per line, from column 0; a module spanning lines keeps the lines after it until
   // the next module or require. Two modules on one line would be misattributed, so refuse that layout.
   const defined = (code.match(/__d\(/g) ?? []).length;
@@ -89,7 +107,7 @@ export async function readBundle(bundleFile: string, mapFile: string): Promise<B
   lines.forEach((line, i) => {
     if (line.startsWith('__d(')) {
       const id = Number(/,(\d+),\[[\d,]*\](?:,"[^"]*")?\);?\s*$/.exec(line)?.[1] ?? Number.NaN);
-      const source = lineSources[i] ?? '?';
+      const source = lineSources[i] ?? '(no source map)';
       current = { id, bytes: 0, source, ...packageOf(source) };
       modules.push(current);
     } else if (line.startsWith('__r(')) current = undefined;
@@ -100,6 +118,43 @@ export async function readBundle(bundleFile: string, mapFile: string): Promise<B
       `${bundleFile}: ${defined} modules but ${modules.length} start a line: not a layout doubletake can attribute`,
     );
   return { bytes: Buffer.byteLength(code), modules };
+}
+
+const appParts = (m: Module) =>
+  m.source
+    .replace(/^(\.\.\/|\/)+/, '')
+    .split('/')
+    .slice(0, -1);
+const isApp = (m: Module) => !m.source.includes('node_modules/') && m.source.includes('/');
+
+/**
+ * The app's root folder: from the top, go down while one child folder holds 90% or more of the app bytes
+ * below it (a monorepo's `apps/mobile`, a plain app's `src`). Give it both bundles so they group alike.
+ */
+export function appRoot(...bundles: BundleStats[]): string[] {
+  const app = bundles.flatMap((b) => b.modules.filter(isApp));
+  const root: string[] = [];
+  for (;;) {
+    const below = app.filter((m) => root.every((part, i) => appParts(m)[i] === part));
+    const total = below.reduce((sum, m) => sum + m.bytes, 0);
+    const children = new Map<string, number>();
+    for (const m of below) {
+      const child = appParts(m)[root.length];
+      if (child !== undefined) children.set(child, (children.get(child) ?? 0) + m.bytes);
+    }
+    const [top] = [...children].toSorted((x, y) => y[1] - x[1]);
+    if (!top || top[1] < total * 0.9) return root;
+    root.push(top[0]);
+  }
+}
+
+/** App code (outside node_modules) by its first folder below `root`; app code elsewhere by its own path. */
+export function groupAppCode(stats: BundleStats, root: string[]): void {
+  for (const m of stats.modules.filter(isApp)) {
+    const parts = appParts(m);
+    const under = root.every((part, i) => parts[i] === part);
+    m.pkg = `(app) ${under ? (parts[root.length] ?? '(root files)') : parts.slice(0, root.length + 1).join('/')}`;
+  }
 }
 
 function byPackage(stats: BundleStats): Map<string, number> {

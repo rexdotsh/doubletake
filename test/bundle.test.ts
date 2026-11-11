@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { duplicates, firstSources, packageOf, readBundle } from '../src/bundle.ts';
+import { appRoot, duplicates, firstSources, groupAppCode, packageOf, readBundle } from '../src/bundle.ts';
 
 test('the first source of each generated line, with deltas carried across lines', () => {
   // line 0: source 0; line 1: none; line 2: +2 then +1 (first is 2); line 3: −1 from 3 = 2
@@ -50,5 +50,45 @@ test('a module spanning lines keeps its lines; two modules on one line are refus
     (error: unknown) => String(error),
   );
   expect(refused).toMatch(/2 modules but 1/);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+const section = (line: number, source: string, mappings: string) => ({
+  offset: { line, column: 0 },
+  map: { version: 3, sources: [source], mappings },
+});
+
+test('a mapping-less section (a JSON module) is named by its one source', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'doubletake-'));
+  writeFileSync(join(dir, 'b.js'), '__d(function(){},0,[]);\n__d(function(){},1,[]);\n');
+  writeFileSync(
+    join(dir, 'b.js.map'),
+    JSON.stringify({
+      version: 3,
+      sections: [section(0, 'node_modules/a/i.js', 'AAAA'), section(1, 'locales/en/common.json', '')],
+    }),
+  );
+  const stats = await readBundle(join(dir, 'b.js'), join(dir, 'b.js.map'));
+  expect(stats.modules.map((m) => m.source)).toEqual(['node_modules/a/i.js', 'locales/en/common.json']);
+  rmSync(dir, { recursive: true, force: true });
+});
+
+const app = (source: string, bytes: number) => ({ id: 0, bytes, source, pkg: '', version: '' });
+
+test('app code groups below a root both bundles share', () => {
+  const head = { bytes: 0, modules: [app('src/components/forms/Field.tsx', 500), app('src/screens/Home.tsx', 400)] };
+  const base = { bytes: 0, modules: [app('src/components/forms/Field.tsx', 300), app('src/screens/Home.tsx', 400)] };
+  const root = appRoot(head, base);
+  expect(root).toEqual(['src']);
+  groupAppCode(head, root);
+  expect(head.modules.map((m) => m.pkg)).toEqual(['(app) components', '(app) screens']);
+});
+
+test('a mapping-less section spanning two modules names neither', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'doubletake-'));
+  writeFileSync(join(dir, 'c.js'), '__d(function(){},0,[]);\n__d(function(){},1,[]);\n');
+  writeFileSync(join(dir, 'c.js.map'), JSON.stringify({ version: 3, sections: [section(0, 'locales/en.json', '')] }));
+  const stats = await readBundle(join(dir, 'c.js'), join(dir, 'c.js.map'));
+  expect(stats.modules.map((m) => m.source)).toEqual(['(no source map)', '(no source map)']);
   rmSync(dir, { recursive: true, force: true });
 });
