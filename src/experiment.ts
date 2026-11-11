@@ -8,6 +8,7 @@ import { isCount, metricInfo } from './metrics.ts';
 import { type RunResult, filmed, runOnce } from './run.ts';
 import { type Comparison, LOOKS, MIN_PAIRS, POCOCK_LEVEL, compare, median } from './stats.ts';
 import { type Experiment, type Series, type Variant, saveExperiment } from './store.ts';
+import { type Clip, sideBySide } from './video.ts';
 import { get } from './util.ts';
 
 export type BenchOptions = {
@@ -24,6 +25,8 @@ export type BenchOptions = {
   dir: string;
   experiment: Experiment;
   log: (line: string) => void;
+  /** Film one extra block per side of this case after the pairs and put them side by side. */
+  video?: string;
 };
 
 function caseOf(bench: Bench, name: string): Case {
@@ -174,6 +177,7 @@ async function series(o: BenchOptions, name: string): Promise<Series> {
     primary,
     secondaries,
     refused,
+    declared: [c.primary, ...(c.metrics ?? [])],
     pairs: pairs.length,
     stopped: primary.decided
       ? stopped
@@ -186,6 +190,37 @@ async function series(o: BenchOptions, name: string): Promise<Series> {
 
 function fmt(v: number | undefined): string {
   return v === undefined ? '—' : v >= 100 ? v.toFixed(0) : v.toFixed(1);
+}
+
+/** One filmed block per side, never timed: a warm run, then one recorded run, put side by side. */
+async function film(o: BenchOptions, name: string): Promise<string> {
+  const c = caseOf(o.bench, name);
+  const clips: Clip[] = [];
+  for (const v of [o.base, o.head]) {
+    if (o.base.appId === o.head.appId) await install(o, v);
+    const tap = await o.device.logs(v.appId);
+    try {
+      const offset = await o.device.clockOffset();
+      const ctx = { device: o.device, appId: v.appId, bench: o.bench, case: c, tap, offset, dir: dirname(o.file) };
+      await runOnce(ctx);
+      await mkdir(join(o.dir, 'video'), { recursive: true });
+      const result = await runOnce({ ...ctx, video: join(o.dir, 'video', `film-${v.role}.mp4`) });
+      if (!result.video) throw new Error(`${name}: the filmed run gave no video`);
+      clips.push({
+        file: result.video.file,
+        label: v.label,
+        start: Math.max(0, result.video.first - 0.1),
+        seconds: result.video.seconds,
+      });
+    } finally {
+      await tap.stop();
+      await o.device.terminate(v.appId);
+    }
+  }
+  const [left, right] = clips;
+  if (!left || !right) throw new Error('filming needs both sides');
+  await sideBySide(left, right, join(o.dir, 'side-by-side.mp4'));
+  return 'side-by-side.mp4';
 }
 
 export async function runBench(o: BenchOptions): Promise<Experiment> {
@@ -202,6 +237,10 @@ export async function runBench(o: BenchOptions): Promise<Experiment> {
     await saveExperiment(o.dir, o.experiment);
   }
   o.experiment.decided = o.experiment.series.every((s) => s.primary.decided);
+  if (o.video) {
+    o.log(`${o.video}: filming one block per side`);
+    o.experiment.video = await film(o, o.video);
+  }
   await saveExperiment(o.dir, o.experiment);
   return o.experiment;
 }

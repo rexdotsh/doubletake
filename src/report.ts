@@ -79,7 +79,8 @@ export function summary(e: Experiment): string {
       lines.push(
         `    ${c.metric.padEnd(18)} ${value(c.metric, c.base).padStart(10)} → ${value(c.metric, c.head).padEnd(10)} ${change(c).padEnd(30)} ${verdict(c)}`,
       );
-    for (const [m, why] of Object.entries(s.refused)) lines.push(`    ${m.padEnd(18)} refused: ${why}`);
+    for (const [m, why] of Object.entries(s.refused))
+      if (s.declared.includes(m)) lines.push(`    ${m.padEnd(18)} refused: ${why}`);
     lines.push('');
   }
   for (const c of e.checks) {
@@ -112,7 +113,9 @@ export function card(e: Experiment): string {
   const [base, head] = sideLabels(e);
   const lead = e.series.map((s) => `**${s.case}**: ${headline(s)} (${s.primary.metric})`).join(' · ');
   const refused = e.series.flatMap((s) =>
-    Object.entries(s.refused).map(([m, why]) => `\`${m}\` (${why.split(':')[0]})`),
+    Object.entries(s.refused)
+      .filter(([m]) => s.declared.includes(m))
+      .map(([m, why]) => `\`${m}\` (${why.split(':')[0]})`),
   );
   const plan = e.plan;
   const lines = [

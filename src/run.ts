@@ -5,16 +5,18 @@ import { Refusal } from './device.ts';
 import { countersIn, marksIn } from './events.ts';
 import { type FlowState, launch, runSteps } from './flow.ts';
 import { sleep } from './sh.ts';
-import { decodeFrames, visualTimes } from './visual.ts';
+import { VIDEO_FPS, decodeFrames, visualTimes } from './visual.ts';
 
 type RunValues = Record<string, number>;
+/** A run's recording, if filmed, and when its action began (host clock). */
+type Filmed = { recording?: Recording; action: number };
 /** A measured window and the start of the app process in it, device clock. */
 type Window = { from: number; to: number; launched: number };
 export type RunResult = {
   values: RunValues;
   /** Metrics the run could not give, with the reason. */
   refused: Record<string, string>;
-  video?: string;
+  video?: { file: string; first: number; seconds: number };
 };
 
 export type RunContext = {
@@ -82,21 +84,27 @@ async function addMemory(values: RunValues, ctx: RunContext, pid: number): Promi
   if (memory.endMiB !== undefined) values['memory.end'] = memory.endMiB;
 }
 
+/** Stops a recording; a launch's video also gives launch.visual. Returns the clip and where its action starts. */
 async function analyseVideo(
   recording: Recording,
   values: RunValues,
   refused: Record<string, string>,
   bench: Bench,
-): Promise<string> {
+  launchCase: boolean,
+  action: number,
+): Promise<RunResult['video']> {
   const file = await recording.stop();
+  const frames = await decodeFrames(file);
+  const seconds = frames.length / VIDEO_FPS;
+  const at = Math.max(0, action - recording.startedAt);
   try {
-    const visual = visualTimes(await decodeFrames(file), bench.ignore);
-    values['launch.visual'] = visual.complete - visual.first;
+    const visual = visualTimes(frames, bench.ignore, 1000, at);
+    if (launchCase) values['launch.visual'] = visual.complete - visual.first;
   } catch (error) {
     if (!(error instanceof Refusal)) throw error;
-    refused['launch.visual'] = `${error.validator}: ${error.message}`;
+    if (launchCase) refused['launch.visual'] = `${error.validator}: ${error.message}`;
   }
-  return file;
+  return { file, first: at / 1000, seconds };
 }
 
 /** A cold launch: untimed setup, then the app is terminated and launched; times are from the process's start. */
@@ -105,7 +113,7 @@ async function launchRun(
   state: FlowState,
   values: RunValues,
   refused: Record<string, string>,
-): Promise<Recording | undefined> {
+): Promise<Filmed> {
   const { device, appId } = ctx;
   const c = ctx.case;
   if (c.setup) await runSteps(c.setup, state);
@@ -135,7 +143,7 @@ async function launchRun(
   await addMemory(values, ctx, launched.pid);
   addSdk(values, refused, ctx, { from: start, to: end, launched: start });
   refuse(refused, UI_FRAME_METRICS, 'NotForCase: UI frame counts are for run cases');
-  return recording;
+  return { recording, action: launched.t0 };
 }
 
 /** A run or idle case: untimed setup, then the timed steps (or the idle wait) between two CPU readings. */
@@ -144,13 +152,15 @@ async function windowRun(
   state: FlowState,
   values: RunValues,
   refused: Record<string, string>,
-): Promise<void> {
+): Promise<Filmed> {
   const { device, appId } = ctx;
   const c = ctx.case;
   if (c.setup) await runSteps(c.setup, state);
   if (!state.launched) await launch(state);
   const pid = state.launched?.pid ?? 0;
   await device.frames?.reset(appId);
+  const recording = ctx.video ? await device.record(ctx.video) : undefined;
+  if (recording) await sleep(1000);
   const cpuBefore = await device.cpuMs(pid);
   const start = Date.now();
   state.since = start + ctx.offset;
@@ -161,6 +171,7 @@ async function windowRun(
   values['cpu.time'] = cpu;
   if (c.idle) values['cpu.idle'] = cpu / ((end - start) / 1000);
   else values['run.duration'] = end - start;
+  if (recording) await sleep(1000);
   await sleep(DRAIN_MS);
   await addMemory(values, ctx, pid);
   if (device.frames) {
@@ -176,9 +187,10 @@ async function windowRun(
     to: end + ctx.offset,
     launched: (state.launched?.t0 ?? 0) + ctx.offset,
   });
+  return { recording, action: start };
 }
 
-/** One run of a case on an installed app. */
+/** One run of a case on an installed app; with `video`, the run is filmed (only filmed blocks pass one). */
 export async function runOnce(ctx: RunContext): Promise<RunResult> {
   const values: RunValues = {};
   const refused: Record<string, string> = {};
@@ -191,11 +203,10 @@ export async function runOnce(ctx: RunContext): Promise<RunResult> {
     offset: ctx.offset,
     consumed: new Set(),
   };
-  if (caseKind(ctx.case) === 'launch') {
-    const recording = await launchRun(ctx, state, values, refused);
-    const video = recording ? await analyseVideo(recording, values, refused, ctx.bench) : undefined;
-    return { values, refused, video };
-  }
-  await windowRun(ctx, state, values, refused);
-  return { values, refused };
+  const launchCase = caseKind(ctx.case) === 'launch';
+  const { recording, action } = launchCase
+    ? await launchRun(ctx, state, values, refused)
+    : await windowRun(ctx, state, values, refused);
+  const video = recording ? await analyseVideo(recording, values, refused, ctx.bench, launchCase, action) : undefined;
+  return { values, refused, video };
 }

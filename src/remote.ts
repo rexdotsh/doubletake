@@ -121,6 +121,8 @@ async function fetchExperiment(host: Host, id: string): Promise<void> {
   await mkdir(local, { recursive: true });
   const untar = spawn('tar', ['-xzf', '-', '-C', local], { stdio: ['pipe', 'ignore', 'inherit'] });
   const untarred = new Promise<number>((done) => untar.on('close', (status) => done(status ?? 1)));
-  const sent = await sh(host, `cd ${REMOTE}/experiments && tar -czf - ${q(id)}`, { stdout: untar.stdin });
+  const sent = await sh(host, `cd ${REMOTE}/experiments && COPYFILE_DISABLE=1 tar -czf - ${q(id)}`, {
+    stdout: untar.stdin,
+  });
   if (sent !== 0 || (await untarred) !== 0) throw new Error(`could not copy ${id} back from the host`);
 }

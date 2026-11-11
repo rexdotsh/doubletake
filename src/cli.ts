@@ -6,6 +6,7 @@ import pkg from '../package.json' with { type: 'json' };
 import { type Bench, loadBench } from './bench.ts';
 import type { Device } from './device.ts';
 import { Refusal } from './device.ts';
+import { androidDevice } from './android.ts';
 import { runBench, runCheck } from './experiment.ts';
 import { iosDevice, listSimulators } from './ios.ts';
 import type { Platform } from './metrics.ts';
@@ -33,6 +34,7 @@ const USAGE = `doubletake ${pkg.version}: A/B performance for React Native apps 
   --device <id|name>      simulator udid or name, or adb serial
   --host "<ssh command>"  run on that machine (e.g. "ssh mac"): builds and bench file go over, results come back
   --host-init "<shell>"   run first on the host (e.g. ". ~/env.sh")
+  --video [case]          after the pairs, film one more run per side and put them side by side
   --json                  print the experiment record
 `;
 
@@ -49,6 +51,7 @@ type Flags = {
   host?: string;
   'host-init'?: string;
   id?: string;
+  video?: string;
   json?: boolean;
   format?: string;
   comment?: string;
@@ -70,6 +73,7 @@ const OPTIONS = {
   host: { type: 'string' },
   'host-init': { type: 'string' },
   id: { type: 'string' },
+  video: { type: 'string' },
   json: { type: 'boolean' },
   format: { type: 'string' },
   comment: { type: 'string' },
@@ -95,8 +99,7 @@ function platformOf(flags: Flags, specs: (string | undefined)[]): Platform {
 }
 
 async function openDevice(platform: Platform, want?: string): Promise<Device> {
-  if (platform === 'ios') return iosDevice(want);
-  throw new Error('Android is not supported yet');
+  return platform === 'ios' ? iosDevice(want) : androidDevice(want);
 }
 
 async function hostLine(): Promise<string> {
@@ -161,7 +164,7 @@ async function remote(command: 'bench' | 'check', file: string, ssh: string, fla
       .filter(Boolean)
       .map((s) => basename((s ?? '').replace(/^host:/, '')).replace(/\.(app|apk)\/?$/, ''))
       .join(',');
-  const passthrough = (['pairs', 'runs', 'warmup', 'device'] as const).flatMap((k) => {
+  const passthrough = (['pairs', 'runs', 'warmup', 'device', 'video'] as const).flatMap((k) => {
     const v = flags[k];
     return v ? [`--${k}`, v] : [];
   });
@@ -230,7 +233,12 @@ async function measure(command: 'bench' | 'check', file: string | undefined, fla
   };
   log(`doubletake ${id}: ${device.name} (${device.os}), ${cases.length} case(s), results in ${dir}`);
   const common = { device, bench: loaded, file: resolve(file), cases, head, runs, dir, experiment, log };
-  const done = command === 'bench' ? await runBench({ ...common, base, pairs, warmup }) : await runCheck(common);
+  if (flags.video && !cases.includes(flags.video))
+    throw new Error(`--video ${flags.video}: no such case (${cases.join(', ')})`);
+  const done =
+    command === 'bench'
+      ? await runBench({ ...common, base, pairs, warmup, video: flags.video })
+      : await runCheck(common);
   out(flags.json ? JSON.stringify(done, null, 2) : summary(done));
   if (command === 'bench' && !done.decided) process.exitCode = 5;
 }

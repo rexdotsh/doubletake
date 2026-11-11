@@ -28,6 +28,8 @@ export interface LogTap {
 }
 
 export interface Recording {
+  /** Host clock when the first frame was being captured. */
+  readonly startedAt: number;
   /** Stops recording and returns the local path of the video. */
   stop(): Promise<string>;
 }

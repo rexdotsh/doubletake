@@ -22,6 +22,8 @@ export type Series = {
   primary: Comparison;
   secondaries: Comparison[];
   refused: Record<string, string>;
+  /** The metrics the case declared (primary and metrics): the only refusals reports list. */
+  declared: string[];
   pairs: number;
   stopped: string;
   minutes: number;

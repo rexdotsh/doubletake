@@ -151,14 +151,15 @@ function simulator(udid: string, name: string, os: string): Device {
     clockOffset: () => Promise.resolve(0),
     async record(path): Promise<Recording> {
       const child = stream('xcrun', ['simctl', 'io', udid, 'recordVideo', '--codec=h264', '--force', path], () => {});
-      const started = new Promise<boolean>((resolve) => {
+      const startedAt = await new Promise<number | undefined>((resolve) => {
         child.stderr?.on('data', (chunk: Buffer) => {
-          if (chunk.toString().includes('Recording started')) resolve(true);
+          if (chunk.toString().includes('Recording started')) resolve(Date.now());
         });
-        setTimeout(() => resolve(false), 5000);
+        setTimeout(() => resolve(undefined), 5000);
       });
-      if (!(await started)) throw new Error('simctl recordVideo did not start within 5 s');
+      if (startedAt === undefined) throw new Error('simctl recordVideo did not start within 5 s');
       return {
+        startedAt,
         async stop() {
           await stop(child);
           return path;
