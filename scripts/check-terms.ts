@@ -32,8 +32,7 @@ function main(): void {
   const problems: string[] = [];
   for (const file of git('ls-files', '-z').split('\0').filter(Boolean)) {
     const bytes = readFileSync(file);
-    if (bytes.includes(0)) continue;
-    const term = blockedTerm(`${file}\n${bytes.toString('utf8')}`);
+    const term = blockedTerm(bytes.includes(0) ? file : `${file}\n${bytes.toString('utf8')}`);
     if (term) problems.push(`${file}: names a blocked term`);
   }
   for (const entry of git('log', '--all', '--format=%H%x00%B%x00').split('\0\n')) {

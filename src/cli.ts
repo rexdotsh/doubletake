@@ -240,7 +240,11 @@ async function measure(command: 'bench' | 'check', file: string | undefined, fla
     });
     [base, head] = await Promise.all([copy(base, 'base'), copy(head, 'head')]);
     // Fresh containers: an earlier experiment's copies keep their data across installs.
-    for (const v of [base, head]) await device.uninstall(v.appId);
+    for (const v of [base, head]) {
+      await device.uninstall(v.appId);
+      if (await device.isInstalled(v.appId))
+        throw new Error(`could not uninstall ${v.appId}: its old container would carry over`);
+    }
   }
   const pairs = flags.pairs === undefined || flags.pairs === 'auto' ? 'auto' : (int(flags.pairs, 'pairs') ?? 0);
   const runs = int(flags.runs, 'runs');
