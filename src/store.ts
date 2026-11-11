@@ -117,14 +117,27 @@ function alive(pid: number): boolean {
   }
 }
 
-/** Takes the device for one bench at a time across processes; returns the release. */
+/** Takes the device for one bench at a time across processes (exclusive create); returns the release. */
 export async function lockDevice(device: string): Promise<() => Promise<void>> {
   const dir = join(home(), 'locks');
   await mkdir(dir, { recursive: true });
   const file = join(dir, `${device.replace(/[^\w.-]/g, '_')}.pid`);
-  const holder = Number(await readFile(file, 'utf8').catch(() => ''));
-  if (holder && holder !== process.pid && alive(holder))
-    throw new Error(`device ${device} is in use by doubletake (pid ${holder}): one bench per device at a time`);
-  await writeFile(file, String(process.pid));
-  return () => rm(file, { force: true });
+  const mine = String(process.pid);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      await writeFile(file, mine, { flag: 'wx' });
+      return async () => {
+        if ((await readFile(file, 'utf8').catch(() => '')) === mine) await rm(file, { force: true });
+      };
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
+      const holder = Number(await readFile(file, 'utf8').catch(() => ''));
+      if (holder && alive(holder))
+        throw new Error(`device ${device} is in use by doubletake (pid ${holder}): one bench per device at a time`);
+      // A dead holder's lock: remove it by renaming (atomic), so two takers cannot both delete and create.
+      await rename(file, `${file}.stale-${mine}`).catch(() => undefined);
+      await rm(`${file}.stale-${mine}`, { force: true });
+    }
+  }
+  throw new Error(`could not take the lock for device ${device}`);
 }
