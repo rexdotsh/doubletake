@@ -7,7 +7,7 @@ import { type Bench, loadBench } from './bench.ts';
 import type { Device } from './device.ts';
 import { Refusal } from './device.ts';
 import { androidDevice } from './android.ts';
-import { bundleReport, readBundle } from './bundle.ts';
+import { appRoot, bundleReport, groupAppCode, readBundle } from './bundle.ts';
 import { runBench, runCheck } from './experiment.ts';
 import { serve } from './mcp.ts';
 import { iosDevice, listSimulators } from './ios.ts';
@@ -306,7 +306,10 @@ async function bundle(files: (string | undefined)[]): Promise<void> {
   if (!headJs || !headMap || (baseJs && !baseMap))
     throw new Error('usage: doubletake bundle <bundle.js> <bundle.js.map> [<base.js> <base.js.map>]');
   const head = await readBundle(headJs, headMap);
-  out(bundleReport(head, baseJs && baseMap ? await readBundle(baseJs, baseMap) : undefined));
+  const base = baseJs && baseMap ? await readBundle(baseJs, baseMap) : undefined;
+  const root = base ? appRoot(head, base) : appRoot(head);
+  for (const stats of base ? [head, base] : [head]) groupAppCode(stats, root);
+  out(bundleReport(head, base));
 }
 
 async function status(): Promise<void> {

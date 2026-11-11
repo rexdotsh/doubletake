@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { duplicates, firstSources, packageOf, readBundle } from '../src/bundle.ts';
+import { appRoot, duplicates, firstSources, groupAppCode, packageOf, readBundle } from '../src/bundle.ts';
 
 test('the first source of each generated line, with deltas carried across lines', () => {
   // line 0: source 0; line 1: none; line 2: +2 then +1 (first is 2); line 3: −1 from 3 = 2
@@ -71,4 +71,15 @@ test('a mapping-less section (a JSON module) is named by its one source', async 
   const stats = await readBundle(join(dir, 'b.js'), join(dir, 'b.js.map'));
   expect(stats.modules.map((m) => m.source)).toEqual(['node_modules/a/i.js', 'locales/en/common.json']);
   rmSync(dir, { recursive: true, force: true });
+});
+
+const app = (source: string, bytes: number) => ({ id: 0, bytes, source, pkg: '', version: '' });
+
+test('app code groups below a root both bundles share', () => {
+  const head = { bytes: 0, modules: [app('src/components/forms/Field.tsx', 500), app('src/screens/Home.tsx', 400)] };
+  const base = { bytes: 0, modules: [app('src/components/forms/Field.tsx', 300), app('src/screens/Home.tsx', 400)] };
+  const root = appRoot(head, base);
+  expect(root).toEqual(['src']);
+  groupAppCode(head, root);
+  expect(head.modules.map((m) => m.pkg)).toEqual(['(app) components', '(app) screens']);
 });

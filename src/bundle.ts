@@ -68,9 +68,10 @@ function lineSourcesOf(map: unknown, file: string): (string | undefined)[] {
       const lines = lineSourcesOf(dig(section, 'map'), file);
       if (typeof line !== 'number') continue;
       lines.forEach((source, i) => (out[line + i] ??= source));
-      // A section with one source and no mappings (Metro's JSON and asset modules) still names its module.
+      // A section with one source and no mappings at all (Metro's JSON and asset modules) names its first line.
       const sources = dig(section, 'map', 'sources');
-      if (Array.isArray(sources) && sources.length === 1) out[line] ??= String(sources[0]);
+      if (Array.isArray(sources) && sources.length === 1 && dig(section, 'map', 'mappings') === '')
+        out[line] ??= String(sources[0]);
     }
     return out;
   }
@@ -99,7 +100,6 @@ export async function readBundle(bundleFile: string, mapFile: string): Promise<B
     } else if (line.startsWith('__r(')) current = undefined;
     if (current) current.bytes += Buffer.byteLength(line) + 1;
   });
-  groupAppCode(modules);
   if (defined !== modules.length)
     throw new Error(
       `${bundleFile}: ${defined} modules but ${modules.length} start a line: not a layout doubletake can attribute`,
@@ -107,22 +107,40 @@ export async function readBundle(bundleFile: string, mapFile: string): Promise<B
   return { bytes: Buffer.byteLength(code), modules };
 }
 
+const appParts = (m: Module) =>
+  m.source
+    .replace(/^(\.\.\/|\/)+/, '')
+    .split('/')
+    .slice(0, -1);
+const isApp = (m: Module) => !m.source.includes('node_modules/') && m.source.includes('/');
+
 /**
- * App code (outside node_modules) is grouped by its first folder below the app's root: the two-folder prefix
- * holding the most app bytes (a monorepo's `apps/mobile`). Other app sources keep their two-folder prefix.
+ * The app's root folder: from the top, go down while one child folder holds 90% or more of the app bytes
+ * below it (a monorepo's `apps/mobile`, a plain app's `src`). Give it both bundles so they group alike.
  */
-function groupAppCode(modules: Module[]): void {
-  const app = modules.filter((m) => !m.source.includes('node_modules/') && m.source.includes('/'));
-  const parts = (m: Module) => m.source.replace(/^(\.\.\/|\/)+/, '').split('/');
-  const weight = new Map<string, number>();
-  for (const m of app) {
-    const root = parts(m).slice(0, 2).join('/');
-    weight.set(root, (weight.get(root) ?? 0) + m.bytes);
+export function appRoot(...bundles: BundleStats[]): string[] {
+  const app = bundles.flatMap((b) => b.modules.filter(isApp));
+  const root: string[] = [];
+  for (;;) {
+    const below = app.filter((m) => root.every((part, i) => appParts(m)[i] === part));
+    const total = below.reduce((sum, m) => sum + m.bytes, 0);
+    const children = new Map<string, number>();
+    for (const m of below) {
+      const child = appParts(m)[root.length];
+      if (child !== undefined) children.set(child, (children.get(child) ?? 0) + m.bytes);
+    }
+    const [top] = [...children].toSorted((x, y) => y[1] - x[1]);
+    if (!top || top[1] < total * 0.9) return root;
+    root.push(top[0]);
   }
-  const [root] = [...weight].toSorted((x, y) => y[1] - x[1])[0] ?? [''];
-  for (const m of app) {
-    const p = parts(m);
-    m.pkg = `(app) ${p.slice(0, 2).join('/') === root && p.length > 3 ? p[2] : p.slice(0, 2).join('/')}`;
+}
+
+/** App code (outside node_modules) by its first folder below `root`; app code elsewhere by its own path. */
+export function groupAppCode(stats: BundleStats, root: string[]): void {
+  for (const m of stats.modules.filter(isApp)) {
+    const parts = appParts(m);
+    const under = root.every((part, i) => parts[i] === part);
+    m.pkg = `(app) ${under ? (parts[root.length] ?? '(root files)') : parts.slice(0, root.length + 1).join('/')}`;
   }
 }
 
