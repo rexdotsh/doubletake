@@ -1,9 +1,9 @@
 import { mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
-import { type Device, type Recording, logTap } from './device.ts';
+import { type Action, type Device, type Recording, logTap } from './device.ts';
 import { maestroCommands, maestroInline } from './maestro.ts';
-import { run, stop, stream } from './sh.ts';
+import { run, stop, stream, which } from './sh.ts';
 import { dig, isRecord } from './util.ts';
 
 type SimDevice = { udid: string; name: string; state: string; runtime: string };
@@ -73,10 +73,58 @@ export async function iosDevice(want?: string): Promise<Device> {
   }
   if (sim.state !== 'Booted') await simctl('boot', sim.udid);
   await simctl('bootstatus', sim.udid, '-b');
-  return simulator(sim.udid, sim.name, sim.runtime);
+  return simulator(sim.udid, sim.name, sim.runtime, (await which('axe')) ?? undefined);
 }
 
-function simulator(udid: string, name: string, os: string): Device {
+/** The simulator's screen in points, from AXe's accessibility tree (its application frame). */
+async function screenPoints(axe: string, udid: string): Promise<{ w: number; h: number }> {
+  const tree: unknown = JSON.parse((await run(axe, ['describe-ui', '--udid', udid])).stdout);
+  const [w, h] = [dig(tree, 0, 'frame', 'width'), dig(tree, 0, 'frame', 'height')];
+  if (typeof w !== 'number' || typeof h !== 'number') throw new Error('axe describe-ui gave no screen frame');
+  return { w, h };
+}
+
+/** Taps and swipes through AXe (milliseconds each, where Maestro takes seconds to start). */
+async function axeInput(axe: string, udid: string, actions: readonly Action[]): Promise<void> {
+  let screen: { w: number; h: number } | undefined;
+  const pt = async ([x, y]: [number, number]) => {
+    if (x > 1 || y > 1) return [x, y];
+    screen ??= await screenPoints(axe, udid);
+    return [x * screen.w, y * screen.h];
+  };
+  for (const a of actions) {
+    if ('tap' in a) {
+      const at = a.tap;
+      if (typeof at === 'string') {
+        await run(axe, ['tap', '--label', at, '--wait-timeout', '10', '--udid', udid]);
+        continue;
+      }
+      const [x, y] = await pt(at);
+      await run(axe, ['tap', '-x', String(Math.round(x ?? 0)), '-y', String(Math.round(y ?? 0)), '--udid', udid]);
+    } else {
+      const [sx, sy] = await pt(a.swipe.from);
+      const [ex, ey] = await pt(a.swipe.to);
+      const coords = [sx, sy, ex, ey].map((v) => String(Math.round(v ?? 0)));
+      await run(axe, [
+        'swipe',
+        '--start-x',
+        coords[0] ?? '0',
+        '--start-y',
+        coords[1] ?? '0',
+        '--end-x',
+        coords[2] ?? '0',
+        '--end-y',
+        coords[3] ?? '0',
+        '--duration',
+        String(a.swipe.duration / 1000),
+        '--udid',
+        udid,
+      ]);
+    }
+  }
+}
+
+function simulator(udid: string, name: string, os: string, axe: string | undefined): Device {
   const executables = new Map<string, string>();
   return {
     platform: 'ios',
@@ -189,6 +237,7 @@ function simulator(udid: string, name: string, os: string): Device {
       };
     },
     openUrl: async (url) => void (await simctl('openurl', udid, url)),
-    input: (appId, actions) => maestroInline(udid, appId, maestroCommands(actions)),
+    input: (appId, actions) =>
+      axe ? axeInput(axe, udid, actions) : maestroInline(udid, appId, maestroCommands(actions)),
   };
 }
