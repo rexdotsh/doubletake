@@ -117,29 +117,28 @@ function alive(pid: number): boolean {
   }
 }
 
-/** Takes the device for one bench at a time across processes (exclusive create); returns the release. */
+/**
+ * Takes the device for one bench at a time across processes (exclusive create); returns the release. Fails
+ * closed: a lock left by a dead process is never taken over automatically, since two takers cannot tell
+ * which of them reclaimed it.
+ */
 export async function lockDevice(device: string): Promise<() => Promise<void>> {
   const dir = join(home(), 'locks');
   await mkdir(dir, { recursive: true });
   const file = join(dir, `${device.replace(/[^\w.-]/g, '_')}.pid`);
   const mine = String(process.pid);
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      await writeFile(file, mine, { flag: 'wx' });
-      return async () => {
-        if ((await readFile(file, 'utf8').catch(() => '')) === mine) await rm(file, { force: true });
-      };
-    } catch (error) {
-      if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
-      const holder = Number(await readFile(file, 'utf8').catch(() => ''));
-      if (holder && alive(holder))
-        throw new Error(`device ${device} is in use by doubletake (pid ${holder}): one bench per device at a time`, {
-          cause: error,
-        });
-      // A dead holder's lock: remove it by renaming (atomic), so two takers cannot both delete and create.
-      await rename(file, `${file}.stale-${mine}`).catch(() => undefined);
-      await rm(`${file}.stale-${mine}`, { force: true });
-    }
+  try {
+    await writeFile(file, mine, { flag: 'wx' });
+  } catch (error) {
+    if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
+    const holder = Number(await readFile(file, 'utf8').catch(() => ''));
+    const why =
+      holder && !alive(holder)
+        ? `a stale lock from pid ${holder}, which is gone: remove ${file} if no bench is running`
+        : `in use by pid ${holder || '?'}`;
+    throw new Error(`device ${device} is locked (${why}): one bench per device at a time`, { cause: error });
   }
-  throw new Error(`could not take the lock for device ${device}`);
+  return async () => {
+    if ((await readFile(file, 'utf8').catch(() => '')) === mine) await rm(file, { force: true });
+  };
 }
