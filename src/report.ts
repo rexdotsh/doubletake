@@ -83,6 +83,7 @@ export function summary(e: Experiment): string {
       if (declared(s).includes(m)) lines.push(`    ${m.padEnd(18)} refused: ${why}`);
     lines.push('');
   }
+  for (const w of e.warnings) lines.push(`! ${w}`);
   for (const c of e.checks) {
     lines.push(`${c.case} (check, one run)`);
     for (const [m, v] of Object.entries(c.values)) lines.push(`    ${m.padEnd(18)} ${value(m, v)}`);
@@ -142,6 +143,9 @@ export function card(e: Experiment): string {
     `- Change: mean of the paired log ratios (or differences), with a bootstrap interval (10,000 resamples, expanded percentile) at ${plan.pairs === 'auto' ? '98.42% at each planned look (8, 12, 18, 26, 40 pairs)' : '95%'} for the primary; a direction also needs the signed-rank test to agree.`,
     '- ★ is the primary, declared before the run. Declared secondaries get words only after it decided, at a Bonferroni level (95% across them); `·` is descriptive (95%).',
     ...(refused.length ? [`- Not measured: ${refused.join(', ')}.`] : []),
+    ...(e.warnings.length
+      ? [`- ${e.warnings.length} block(s) ran while the host's load rose above half its cores; see result.json.`]
+      : []),
     '',
     '</details>',
     `<!-- doubletake:${e.id} end -->`,

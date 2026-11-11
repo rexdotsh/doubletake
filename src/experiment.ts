@@ -1,4 +1,5 @@
 import { appendFile, mkdir } from 'node:fs/promises';
+import { cpus, loadavg } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { Bench, Case } from './bench.ts';
 import { pct } from './bench.ts';
@@ -8,6 +9,7 @@ import { isCount, metricInfo } from './metrics.ts';
 import { type RunResult, filmed, runOnce } from './run.ts';
 import { type Comparison, LOOKS, MIN_PAIRS, POCOCK_LEVEL, compare, median } from './stats.ts';
 import { type Experiment, type Series, type Variant, lockDevice, saveExperiment } from './store.ts';
+import { sleep } from './sh.ts';
 import { type Clip, sideBySide } from './video.ts';
 import { get } from './util.ts';
 
@@ -46,7 +48,31 @@ async function install(o: BenchOptions, v: Variant): Promise<void> {
 }
 
 /** One fresh block: the variant's app, `warmup` discarded runs, then `runs` measured ones (median per metric). */
+/** Load above this share of the host's cores is other work competing with the app for CPU. */
+const BUSY_SHARE = 0.5;
+const QUIET_WAIT_MS = 30 * 60_000;
+
+/** Waits until the host's 1-minute load is under half its cores, then returns it; refuses after 30 minutes. */
+async function quiet(o: BenchOptions): Promise<number> {
+  const limit = cpus().length * BUSY_SHARE;
+  const deadline = Date.now() + QUIET_WAIT_MS;
+  let said = false;
+  for (;;) {
+    const load = loadavg()[0] ?? 0;
+    if (load <= limit) return load;
+    if (Date.now() > deadline)
+      throw new Refusal(
+        'Background',
+        `the host's load stayed at ${load.toFixed(1)} (over ${limit} for ${cpus().length} cores) for 30 minutes: something else is using the machine`,
+      );
+    if (!said) o.log(`waiting for the host to go quiet: load ${load.toFixed(1)}, limit ${limit}`);
+    said = true;
+    await sleep(15_000);
+  }
+}
+
 async function block(o: BenchOptions, name: string, c: Case, v: Variant, tag: string): Promise<Block> {
+  const loadBefore = await quiet(o);
   const sequential = o.base.appId === o.head.appId;
   if (sequential) await install(o, v);
   const tap = await o.device.logs(v.appId);
@@ -77,6 +103,11 @@ async function block(o: BenchOptions, name: string, c: Case, v: Variant, tag: st
     await tap.stop();
     await o.device.terminate(v.appId);
   }
+  const loadAfter = loadavg()[0] ?? 0;
+  if (loadAfter > cpus().length * BUSY_SHARE)
+    o.experiment.warnings.push(
+      `${name} ${tag} ${v.role}: the host's load rose to ${loadAfter.toFixed(1)} during the block (from ${loadBefore.toFixed(1)})`,
+    );
   const values: Record<string, number> = {};
   const varying = new Set<string>();
   const refused: Record<string, string> = {};
