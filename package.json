@@ -1,0 +1,63 @@
+{
+  "name": "doubletake",
+  "version": "0.1.0",
+  "description": "A/B performance for React Native apps on the iOS Simulator and Android Emulator: paired runs, confidence intervals, verdicts and PR cards.",
+  "keywords": [
+    "ab-testing",
+    "agent",
+    "android-emulator",
+    "benchmark",
+    "expo",
+    "ios-simulator",
+    "jank",
+    "performance",
+    "react-native",
+    "startup"
+  ],
+  "homepage": "https://github.com/rexdotsh/doubletake#readme",
+  "bugs": "https://github.com/rexdotsh/doubletake/issues",
+  "license": "MIT",
+  "author": "rexdotsh",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/rexdotsh/doubletake.git"
+  },
+  "bin": {
+    "doubletake": "dist/doubletake.mjs"
+  },
+  "files": [
+    "dist",
+    "skill",
+    "schema"
+  ],
+  "type": "module",
+  "exports": {
+    "./sdk": {
+      "types": "./dist/sdk/index.d.ts",
+      "default": "./dist/sdk/index.js"
+    }
+  },
+  "scripts": {
+    "build": "bun scripts/build.ts",
+    "check": "tsc -p . && tsc -p sdk",
+    "lint": "oxlint --type-aware --deny-warnings",
+    "knip": "knip",
+    "fmt": "oxfmt",
+    "fmt:check": "oxfmt --check",
+    "test": "bun test",
+    "prepack": "bun run build"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.3",
+    "@types/node": "^26.6.4",
+    "knip": "^6.41.0",
+    "oxfmt": "^0.72.0",
+    "oxlint": "^1.87.0",
+    "oxlint-tsgolint": "^7.0.2004",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=22.18"
+  },
+  "packageManager": "bun@1.4.4"
+}
