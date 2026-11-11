@@ -26,8 +26,9 @@ export function blockedTerm(text: string): string | undefined {
   return undefined;
 }
 
+const git = (...args: string[]) => execFileSync('git', args, { encoding: 'utf8', maxBuffer: 1 << 28 });
+
 function main(): void {
-  const git = (...args: string[]) => execFileSync('git', args, { encoding: 'utf8', maxBuffer: 1 << 28 });
   const problems: string[] = [];
   for (const file of git('ls-files', '-z').split('\0').filter(Boolean)) {
     const bytes = readFileSync(file);
