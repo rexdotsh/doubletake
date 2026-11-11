@@ -123,6 +123,9 @@ function device(serial: string, adb: Adb, shell: (cmd: string) => Promise<string
     async install(apk) {
       await adb('install', '-r', '-d', apk);
     },
+    async uninstall(pkg) {
+      await shell(`pm uninstall ${pkg} >/dev/null 2>&1 || true`);
+    },
     async isInstalled(pkg) {
       return (await shell(`pm path ${pkg} || true`)).includes('package:');
     },

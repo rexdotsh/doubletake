@@ -1,0 +1,3 @@
+#!/bin/sh
+# Enable once per clone: git config core.hooksPath scripts/hooks
+exec bun scripts/check-terms.ts
