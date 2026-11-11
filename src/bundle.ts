@@ -66,7 +66,11 @@ function lineSourcesOf(map: unknown, file: string): (string | undefined)[] {
     for (const section of sections) {
       const line = dig(section, 'offset', 'line');
       const lines = lineSourcesOf(dig(section, 'map'), file);
-      if (typeof line === 'number') lines.forEach((source, i) => (out[line + i] ??= source));
+      if (typeof line !== 'number') continue;
+      lines.forEach((source, i) => (out[line + i] ??= source));
+      // A section with one source and no mappings (Metro's JSON and asset modules) still names its module.
+      const sources = dig(section, 'map', 'sources');
+      if (Array.isArray(sources) && sources.length === 1) out[line] ??= String(sources[0]);
     }
     return out;
   }
@@ -89,17 +93,37 @@ export async function readBundle(bundleFile: string, mapFile: string): Promise<B
   lines.forEach((line, i) => {
     if (line.startsWith('__d(')) {
       const id = Number(/,(\d+),\[[\d,]*\](?:,"[^"]*")?\);?\s*$/.exec(line)?.[1] ?? Number.NaN);
-      const source = lineSources[i] ?? '?';
+      const source = lineSources[i] ?? '(no source map)';
       current = { id, bytes: 0, source, ...packageOf(source) };
       modules.push(current);
     } else if (line.startsWith('__r(')) current = undefined;
     if (current) current.bytes += Buffer.byteLength(line) + 1;
   });
+  groupAppCode(modules);
   if (defined !== modules.length)
     throw new Error(
       `${bundleFile}: ${defined} modules but ${modules.length} start a line: not a layout doubletake can attribute`,
     );
   return { bytes: Buffer.byteLength(code), modules };
+}
+
+/**
+ * App code (outside node_modules) is grouped by its first folder below the app's root: the two-folder prefix
+ * holding the most app bytes (a monorepo's `apps/mobile`). Other app sources keep their two-folder prefix.
+ */
+function groupAppCode(modules: Module[]): void {
+  const app = modules.filter((m) => !m.source.includes('node_modules/') && m.source.includes('/'));
+  const parts = (m: Module) => m.source.replace(/^(\.\.\/|\/)+/, '').split('/');
+  const weight = new Map<string, number>();
+  for (const m of app) {
+    const root = parts(m).slice(0, 2).join('/');
+    weight.set(root, (weight.get(root) ?? 0) + m.bytes);
+  }
+  const [root] = [...weight].toSorted((x, y) => y[1] - x[1])[0] ?? [''];
+  for (const m of app) {
+    const p = parts(m);
+    m.pkg = `(app) ${p.slice(0, 2).join('/') === root && p.length > 3 ? p[2] : p.slice(0, 2).join('/')}`;
+  }
 }
 
 function byPackage(stats: BundleStats): Map<string, number> {

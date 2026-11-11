@@ -52,3 +52,23 @@ test('a module spanning lines keeps its lines; two modules on one line are refus
   expect(refused).toMatch(/2 modules but 1/);
   rmSync(dir, { recursive: true, force: true });
 });
+
+const section = (line: number, source: string, mappings: string) => ({
+  offset: { line, column: 0 },
+  map: { version: 3, sources: [source], mappings },
+});
+
+test('a mapping-less section (a JSON module) is named by its one source', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'doubletake-'));
+  writeFileSync(join(dir, 'b.js'), '__d(function(){},0,[]);\n__d(function(){},1,[]);\n');
+  writeFileSync(
+    join(dir, 'b.js.map'),
+    JSON.stringify({
+      version: 3,
+      sections: [section(0, 'node_modules/a/i.js', 'AAAA'), section(1, 'locales/en/common.json', '')],
+    }),
+  );
+  const stats = await readBundle(join(dir, 'b.js'), join(dir, 'b.js.map'));
+  expect(stats.modules.map((m) => m.source)).toEqual(['node_modules/a/i.js', 'locales/en/common.json']);
+  rmSync(dir, { recursive: true, force: true });
+});
