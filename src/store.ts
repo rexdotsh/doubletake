@@ -1,9 +1,10 @@
 import { randomBytes } from 'node:crypto';
-import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { Platform } from './metrics.ts';
 import type { Comparison } from './stats.ts';
+import { sleep } from './sh.ts';
 import { isRecord } from './util.ts';
 
 export type Variant = {
@@ -108,6 +109,27 @@ export async function loadExperiment(ref: string): Promise<{ dir: string; experi
   return { dir, experiment };
 }
 
+/**
+ * Removes a dead holder's lock file, one taker at a time: two benches that both saw the dead pid must not both
+ * delete, or the second would delete the first one's new lock. A taker killed mid-way leaves its mutex for 10 s.
+ */
+async function takeOver(file: string, dead: number): Promise<boolean> {
+  const mutex = `${file}.takeover`;
+  try {
+    await mkdir(mutex);
+  } catch {
+    const since = (await stat(mutex).catch(() => undefined))?.mtimeMs ?? Date.now();
+    if (Date.now() - since > 10_000) await rm(mutex, { recursive: true, force: true });
+    return false;
+  }
+  try {
+    if (Number(await readFile(file, 'utf8').catch(() => '')) === dead) await rm(file, { force: true });
+    return true;
+  } finally {
+    await rm(mutex, { recursive: true, force: true });
+  }
+}
+
 function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -134,9 +156,9 @@ export async function lockDevice(device: string): Promise<() => Promise<void>> {
     } catch (error) {
       if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
       const holder = Number(await readFile(file, 'utf8').catch(() => ''));
-      // A bench that was killed leaves its lock behind; its pid being gone is the proof, so take it over once.
-      if (holder && !alive(holder) && attempt === 0) {
-        await rm(file, { force: true });
+      // A bench that was killed leaves its lock behind; its pid being gone is the proof, so take it over.
+      if (holder && !alive(holder) && attempt < 5) {
+        if (!(await takeOver(file, holder))) await sleep(200);
         continue;
       }
       throw new Error(`device ${device} is locked (in use by pid ${holder || '?'}): one bench per device at a time`, {

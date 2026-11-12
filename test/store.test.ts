@@ -18,6 +18,11 @@ test("a killed bench's device lock is taken over; a live one is not", async () =
     );
     expect(refused).toMatch(/in use by pid/);
     await release();
+
+    // Two benches that both find the same dead holder: exactly one gets the device.
+    await writeFile(join(home, 'locks', 'race.pid'), '999999999');
+    const both = await Promise.allSettled([lockDevice('race'), lockDevice('race')]);
+    expect(both.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
   } finally {
     if (before === undefined) delete process.env.DOUBLETAKE_HOME;
     else process.env.DOUBLETAKE_HOME = before;
