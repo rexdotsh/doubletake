@@ -12,7 +12,7 @@ export async function maestro(device: string, file: string, env: Record<string, 
   const bin = await which('maestro');
   if (!bin)
     throw new Error(
-      'maestro is not on PATH: install it (https://maestro.mobile.dev) for maestro steps and Android taps by text',
+      'maestro is not on PATH: install it (https://maestro.mobile.dev) for maestro steps and Android taps on an element',
     );
   const envArgs = Object.entries(env).flatMap(([k, v]) => ['-e', `${k}=${v}`]);
   await run(bin, ['--device', device, 'test', ...envArgs, file], { timeout: 300_000 });
