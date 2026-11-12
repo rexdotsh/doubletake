@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { validate } from '../src/bench.ts';
+import { ms, validate } from '../src/bench.ts';
 import { countersIn, marksIn, parseSdkLine } from '../src/events.ts';
 import { psTime } from '../src/host.ts';
 import { visualTimes } from '../src/visual.ts';
@@ -58,6 +58,10 @@ test('bench files are checked with the nearest key', () => {
   expect(() => validate({ cases: { a: { launch: {}, primary: 'lanch.ttfd' } } })).toThrow(/did you mean launch.ttfd/);
   expect(() => validate({ cases: { a: { run: [{ sleep: '2' }], primary: 'cpu.time' } } })).toThrow(/needs its unit/);
   expect(() => validate({ cases: { a: { run: [], idle: '2s', primary: 'cpu.idle' } } })).toThrow(/exactly one/);
+});
+
+test('durations take hours', () => {
+  expect(ms('2h')).toBe(7_200_000);
 });
 
 test('ps time reads minutes and hours', () => {
