@@ -1,5 +1,14 @@
 import { expect, test } from 'bun:test';
-import { busiest, coresBetween, others, parsePs, summarize, watchOthers } from '../src/host.ts';
+import {
+  addByProgram,
+  busiest,
+  coresBetween,
+  others,
+  parsePs,
+  programOf,
+  summarize,
+  watchOthers,
+} from '../src/host.ts';
 
 const ps = `  1     0   1:00.00 /sbin/launchd
  100     1   0:10.00 node doubletake.mjs bench
@@ -58,5 +67,39 @@ test('a block records the mean beside the busiest 5 s', () => {
     ...Array.from({ length: 10 }, () => ({ ms: 1000, cores: 1 })),
     ...Array.from({ length: 5 }, () => ({ ms: 1000, cores: 4 })),
   ];
-  expect(summarize(intervals)).toEqual({ mean: 2, busiest: 4 });
+  expect(summarize(intervals)).toEqual({ mean: 2, busiest: 4, top: [] });
+});
+
+test('other work is named by program, summed over its processes', () => {
+  const a = {
+    at: 0,
+    byProc: new Map([
+      ['1 /emu/qemu-system-aarch64 -avd a', 1000],
+      ['2 /emu/qemu-system-aarch64 -avd b', 0],
+    ]),
+  };
+  const b = {
+    at: 2000,
+    byProc: new Map([
+      ['1 /emu/qemu-system-aarch64 -avd a', 2000],
+      ['2 /emu/qemu-system-aarch64 -avd b', 1000],
+      ['3 /usr/bin/java -jar gradle', 3000],
+    ]),
+  };
+  const byProgram = new Map<string, number>();
+  addByProgram(a, b, byProgram);
+  expect(programOf('/Applications/Android Studio.app/Contents/jbr/bin/java')).toBe('java');
+  expect(summarize([{ ms: 2000, cores: 2.5 }], byProgram).top).toEqual([
+    { name: 'java', cores: 1.5 },
+    { name: 'qemu-system-aarch64', cores: 1 },
+  ]);
+});
+
+test('a program is named by its executable, even with spaces in the path', () => {
+  const key = '7 /Applications/Android Studio.app/Contents/jbr/bin/java -jar gradle';
+  const a = { at: 0, byProc: new Map([[key, 0]]) };
+  const b = { at: 1000, byProc: new Map([[key, 500]]), names: new Map([[key, 'java']]) };
+  const byProgram = new Map<string, number>();
+  addByProgram(a, b, byProgram);
+  expect([...byProgram]).toEqual([['java', 500]]);
 });
