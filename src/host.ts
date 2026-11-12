@@ -6,7 +6,7 @@ import { run, sleep } from './sh.ts';
 
 type Proc = { pid: number; ppid: number; cpuMs: number; command: string };
 /** CPU per process, keyed by pid and command so a reused pid counts as a new process. */
-export type CpuSnapshot = { at: number; byProc: Map<string, number> };
+export type CpuSnapshot = { at: number; byProc: Map<string, number>; names?: Map<string, string> };
 
 /** "1:02.34", "1:02:03", "2-01:02:03" (ps time, macOS or procps) to ms. */
 export function psTime(text: string): number {
@@ -39,10 +39,24 @@ export function others(procs: readonly Proc[], self: number, isDevice: (command:
 }
 
 export async function snapshot(isDevice: (command: string) => boolean): Promise<CpuSnapshot> {
-  const procs = parsePs((await run('ps', ['-Ao', 'pid=,ppid=,time=,command='])).stdout);
+  // `comm` (the executable's path, last so it may hold spaces) names a program; `command` adds its arguments.
+  const [all, comm] = await Promise.all([
+    run('ps', ['-Ao', 'pid=,ppid=,time=,command=']),
+    run('ps', ['-Ao', 'pid=,comm=']),
+  ]);
+  const exe = new Map(
+    comm.stdout.split('\n').flatMap((line) => {
+      const match = /^\s*(\d+)\s+(.*)$/.exec(line);
+      return match ? [[Number(match[1]), match[2] ?? '']] : [];
+    }),
+  );
+  const mine = others(parsePs(all.stdout), process.pid, isDevice);
   return {
     at: Date.now(),
-    byProc: new Map(others(procs, process.pid, isDevice).map((p) => [`${p.pid} ${p.command}`, p.cpuMs])),
+    byProc: new Map(mine.map((p) => [`${p.pid} ${p.command}`, p.cpuMs])),
+    names: new Map(
+      mine.map((p) => [`${p.pid} ${p.command}`, programOf(exe.get(p.pid) ?? p.command.split(' ')[0] ?? '')]),
+    ),
   };
 }
 
@@ -62,15 +76,15 @@ export function coresBetween(a: CpuSnapshot, b: CpuSnapshot): number {
  */
 export type Others = { mean: number; busiest: number; top: { name: string; cores: number }[] };
 
-/** The executable's file name: `/a/b/qemu-system-aarch64 -avd x` gives `qemu-system-aarch64`. */
-export const programOf = (command: string) => (command.split(' ')[0] ?? '').split('/').pop() ?? '';
+/** The file name of an executable's path: `/a/b c/qemu-system-aarch64` gives `qemu-system-aarch64`. */
+export const programOf = (path: string) => path.split('/').pop() ?? '';
 
 /** CPU ms per program between two snapshots, added into `into`. */
 export function addByProgram(a: CpuSnapshot, b: CpuSnapshot, into: Map<string, number>): void {
   for (const [key, cpu] of b.byProc) {
     const ms = Math.max(0, cpu - (a.byProc.get(key) ?? 0));
     if (!ms) continue;
-    const name = programOf(key.slice(key.indexOf(' ') + 1));
+    const name = b.names?.get(key) ?? programOf(key.slice(key.indexOf(' ') + 1).split(' ')[0] ?? '');
     into.set(name, (into.get(name) ?? 0) + ms);
   }
 }
