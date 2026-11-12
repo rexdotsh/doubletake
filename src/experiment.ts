@@ -1,11 +1,12 @@
 import { appendFile, mkdir } from 'node:fs/promises';
-import { cpus, loadavg } from 'node:os';
+import { cpus } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { Bench, Case } from './bench.ts';
 import { pct } from './bench.ts';
 import type { Device } from './device.ts';
 import { Refusal } from './device.ts';
 import { isCount, metricInfo } from './metrics.ts';
+import { coresBetween, snapshot, watchOthers } from './host.ts';
 import { type RunResult, filmed, runOnce } from './run.ts';
 import { type Comparison, LOOKS, MIN_PAIRS, POCOCK_LEVEL, compare, median } from './stats.ts';
 import { type Experiment, type Series, type Variant, lockDevice, saveExperiment } from './store.ts';
@@ -47,41 +48,52 @@ async function install(o: BenchOptions, v: Variant): Promise<void> {
   else if (!(await o.device.isInstalled(v.appId))) throw new Error(`${v.appId} is not installed on ${o.device.name}`);
 }
 
-/** Load above this share of the host's cores is other work competing with the app for CPU. */
+/** Other processes using more than this share of the host's cores compete with the app for CPU. */
 const BUSY_SHARE = 0.5;
 const QUIET_WAIT_MS = 30 * 60_000;
 
-/** Waits until the host's 1-minute load is under half its cores, then returns it; refuses after 30 minutes. */
-async function quiet(o: BenchOptions): Promise<number> {
-  const limit = cpus().length * BUSY_SHARE;
+const limit = () => cpus().length * BUSY_SHARE;
+
+const isDevice = (o: Pick<BenchOptions, 'device'>) => (command: string) => o.device.isHostProcess(command);
+
+/** Waits until other processes use under half the host's cores over 5 s; refuses after 30 minutes. */
+async function quiet(o: BenchOptions): Promise<void> {
   const deadline = Date.now() + QUIET_WAIT_MS;
   let said = false;
   for (;;) {
-    const load = loadavg()[0] ?? 0;
-    if (load <= limit) return load;
+    const before = await snapshot(isDevice(o));
+    await sleep(5000);
+    const cores = coresBetween(before, await snapshot(isDevice(o)));
+    if (cores <= limit()) return;
     if (Date.now() > deadline)
       throw new Refusal(
         'Background',
-        `the host's load stayed at ${load.toFixed(1)} (over ${limit} for ${cpus().length} cores) for 30 minutes: something else is using the machine`,
+        `other processes kept ${cores.toFixed(1)} of ${cpus().length} cores busy for 30 minutes: something else is using the machine`,
       );
-    if (!said) o.log(`waiting for the host to go quiet: load ${load.toFixed(1)}, limit ${limit}`);
+    if (!said)
+      o.log(`waiting for the host to go quiet: other processes use ${cores.toFixed(1)} cores, limit ${limit()}`);
     said = true;
-    await sleep(15_000);
+    await sleep(10_000);
   }
 }
 
 /**
- * A block on a quiet host. A block during which the load rose above the limit refuses the experiment: a rerun
- * of one side would give it extra launches its pair-mate never had (a 1-minute average is coarse: a floor).
+ * A block on a quiet host. Other work is sampled once a second through the block; when any 5-second stretch
+ * used more than half the cores, the experiment is refused: a rerun of one side would give it launches its
+ * pair-mate never had. Processes that start and end between two samples are not seen.
  */
 async function block(o: BenchOptions, name: string, c: Case, v: Variant, tag: string): Promise<Block> {
-  const loadBefore = await quiet(o);
-  const result = await measureBlock(o, name, c, v, tag);
-  const loadAfter = loadavg()[0] ?? 0;
-  if (loadAfter > cpus().length * BUSY_SHARE)
+  await quiet(o);
+  const watch = watchOthers(isDevice(o));
+  const result = await measureBlock(o, name, c, v, tag).catch(async (error: unknown) => {
+    await watch.stop();
+    throw error;
+  });
+  const cores = await watch.stop();
+  if (cores > limit())
     throw new Refusal(
       'Background',
-      `${name} ${tag} ${v.role}: the host's load rose from ${loadBefore.toFixed(1)} to ${loadAfter.toFixed(1)} during the block: something else is using the machine`,
+      `${name} ${tag} ${v.role}: other processes used ${cores.toFixed(1)} of ${cpus().length} cores for 5 s during the block: something else is using the machine`,
     );
   return result;
 }
@@ -320,18 +332,21 @@ async function check(o: Omit<BenchOptions, 'base' | 'pairs' | 'warmup'>): Promis
   for (const name of o.cases) {
     const c = caseOf(o.bench, name);
     // A check decides nothing, so a busy host is a warning on its values, never a wait or a refusal.
-    const load = loadavg()[0] ?? 0;
+    const watch = watchOthers(isDevice(o));
     const b = await measureBlock(
       { ...o, base: o.head, pairs: 1, warmup: 0, runs: 1 },
       name,
       { ...c, runs: 1 },
       o.head,
       'check',
-    );
-    const busiest = Math.max(load, loadavg()[0] ?? 0);
-    if (busiest > cpus().length * BUSY_SHARE)
+    ).catch(async (error: unknown) => {
+      await watch.stop();
+      throw error;
+    });
+    const cores = await watch.stop();
+    if (cores > limit())
       o.experiment.warnings.push(
-        `${name}: the host's load was ${busiest.toFixed(1)} (over half its ${cpus().length} cores): values from a busy machine`,
+        `${name}: other processes used ${cores.toFixed(1)} of ${cpus().length} cores for 5 s during it: values from a busy machine`,
       );
     o.experiment.checks.push({ case: name, values: b.values, refused: b.refused });
     o.log(
