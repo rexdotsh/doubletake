@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { Platform } from './metrics.ts';
 import type { Comparison } from './stats.ts';
+import { sleep } from './sh.ts';
 import { isRecord } from './util.ts';
 
 export type Variant = {
@@ -108,6 +109,26 @@ export async function loadExperiment(ref: string): Promise<{ dir: string; experi
   return { dir, experiment };
 }
 
+/**
+ * Removes a dead holder's lock file, one taker at a time: two benches that both saw the dead pid must not both
+ * delete, or the second would delete the first one's new lock. The mutex never expires: a taker killed in
+ * these few milliseconds leaves it, and later benches refuse, naming it.
+ */
+async function takeOver(file: string, dead: number): Promise<boolean> {
+  const mutex = `${file}.takeover`;
+  try {
+    await mkdir(mutex);
+  } catch {
+    return false;
+  }
+  try {
+    if (Number(await readFile(file, 'utf8').catch(() => '')) === dead) await rm(file, { force: true });
+    return true;
+  } finally {
+    await rm(mutex, { recursive: true, force: true });
+  }
+}
+
 function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -127,16 +148,24 @@ export async function lockDevice(device: string): Promise<() => Promise<void>> {
   await mkdir(dir, { recursive: true });
   const file = join(dir, `${device.replace(/[^\w.-]/g, '_')}.pid`);
   const mine = String(process.pid);
-  try {
-    await writeFile(file, mine, { flag: 'wx' });
-  } catch (error) {
-    if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
-    const holder = Number(await readFile(file, 'utf8').catch(() => ''));
-    const why =
-      holder && !alive(holder)
-        ? `a stale lock from pid ${holder}, which is gone: remove ${file} if no bench is running`
-        : `in use by pid ${holder || '?'}`;
-    throw new Error(`device ${device} is locked (${why}): one bench per device at a time`, { cause: error });
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await writeFile(file, mine, { flag: 'wx' });
+      break;
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
+      const holder = Number(await readFile(file, 'utf8').catch(() => ''));
+      // A bench that was killed leaves its lock behind; its pid being gone is the proof, so take it over.
+      if (holder && !alive(holder) && attempt < 5) {
+        if (!(await takeOver(file, holder))) await sleep(200);
+        continue;
+      }
+      const why =
+        holder && !alive(holder)
+          ? `pid ${holder} is gone, but ${file}.takeover is held: remove it if no bench is starting`
+          : `in use by pid ${holder || '?'}`;
+      throw new Error(`device ${device} is locked (${why}): one bench per device at a time`, { cause: error });
+    }
   }
   return async () => {
     if ((await readFile(file, 'utf8').catch(() => '')) === mine) await rm(file, { force: true });

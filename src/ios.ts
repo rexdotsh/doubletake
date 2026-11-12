@@ -136,7 +136,14 @@ function simulator(udid: string, name: string, os: string, axe: string | undefin
       if (!pid) throw new Error(`simctl launch printed no pid: ${out}`);
       return { t0: await processStart(pid), pid };
     },
-    cpuMs: async (pid) => psTime((await run('ps', ['-o', 'time=', '-p', String(pid)])).stdout),
+    cpuMs: async (pid) =>
+      psTime(
+        (
+          await run('ps', ['-o', 'time=', '-p', String(pid)]).catch(() => {
+            throw new Error(`the app (pid ${pid}) is gone: it crashed or was terminated, or the simulator shut down`);
+          })
+        ).stdout,
+      ),
     async memory(pid) {
       const dir = await mkdtemp(join(tmpdir(), 'doubletake-'));
       try {
