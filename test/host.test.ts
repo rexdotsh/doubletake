@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { busiest, coresBetween, others, parsePs } from '../src/host.ts';
+import { busiest, coresBetween, others, parsePs, watchOthers } from '../src/host.ts';
 
 const ps = `  1     0   1:00.00 /sbin/launchd
  100     1   0:10.00 node doubletake.mjs bench
@@ -40,4 +40,15 @@ test('a reused pid with another command is a new process', () => {
   const a = { at: 0, byProc: new Map([['400 old', 60_000]]) };
   const b = { at: 1000, byProc: new Map([['400 new', 800]]) };
   expect(coresBetween(a, b)).toBe(0.8);
+});
+
+test('a failing sample is held until stop, not thrown into the void', async () => {
+  const watch = watchOthers(() => {
+    throw new Error('ps failed');
+  });
+  const error = await watch.stop().then(
+    () => '',
+    (e: unknown) => String(e),
+  );
+  expect(error).toContain('ps failed');
 });

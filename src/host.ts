@@ -58,7 +58,7 @@ export function coresBetween(a: CpuSnapshot, b: CpuSnapshot): number {
 
 /** Watches other work once a second; `stop` gives the busiest 5-second stretch, in cores. */
 export function watchOthers(isDevice: (command: string) => boolean): { stop(): Promise<number> } {
-  const state = { running: true };
+  const state: { running: boolean; error?: unknown } = { running: true };
   const intervals: { ms: number; cores: number }[] = [];
   const loop = (async () => {
     let previous = await snapshot(isDevice);
@@ -68,11 +68,15 @@ export function watchOthers(isDevice: (command: string) => boolean): { stop(): P
       intervals.push({ ms: next.at - previous.at, cores: coresBetween(previous, next) });
       previous = next;
     }
-  })();
+  })().catch((error: unknown) => {
+    // Held until stop(), so a failed `ps` never ends the process mid-block.
+    state.error = error;
+  });
   return {
     async stop() {
       state.running = false;
       await loop;
+      if (state.error) throw state.error;
       return busiest(intervals, 5000);
     },
   };
