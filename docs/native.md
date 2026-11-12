@@ -21,10 +21,10 @@ The seam is the marker protocol (`src/events.ts`): one log line per event, `[dou
 
 ## Measured so far
 
-| Sample | Platform | Bench | Result |
-| --- | --- | --- | --- |
-| [`swiftui-sample`](../examples/swiftui-sample) | iOS Simulator (iPhone 17) | cold start, `launch.ttfd` to `mark("home")` | −17.4% [−17.9% … −16.9%], faster, decided at 8 pairs (337 ms; the slow build adds 300 ms plus 4 ms per row-body evaluation) |
-| [`compose-sample`](../examples/compose-sample) | Android Emulator | cold start and scroll | COMPOSE_RESULT |
+| Sample                                         | Platform                  | Bench                                                               | Result                                                                                                                                                                                            |
+| ---------------------------------------------- | ------------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`swiftui-sample`](../examples/swiftui-sample) | iOS Simulator (iPhone 17) | cold start, `launch.ttfd` to `mark("home")`                         | −17.4% [−17.9% … −16.9%], faster, decided at 8 pairs (337 ms; the slow build adds 300 ms plus 4 ms per row-body evaluation)                                                                       |
+| [`compose-sample`](../examples/compose-sample) | Android Emulator (API 36) | cold start, `launch.ttfd` to `mark("home")`; scroll, `frames.janky` | cold start −80.5% [−81.4% … −79.3%], faster, decided at 8 pairs (357 ms for a 300 ms wait plus rows); scroll underpowered (4 ms per row composition did not show as janky frames on the emulator) |
 
 ## What a mark means
 
