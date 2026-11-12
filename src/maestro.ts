@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Action } from './device.ts';
+import { type Action, type Point, isPoint } from './device.ts';
 import { run, which } from './sh.ts';
 
 /**
@@ -30,20 +30,20 @@ export async function maestroInline(device: string, appId: string, commands: str
   }
 }
 
-const fmt = (v: number) => (v <= 1 ? `${Math.round(v * 100)}%` : String(Math.round(v)));
+const regex = (text: string) => JSON.stringify(text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+const xy = ([x, y]: [number, number]) => `"${Math.round(x)},${Math.round(y)}"`;
 
-/** A point for Maestro: fractions of the screen become percentages, larger numbers stay pixels. */
-function pointArg(at: [number, number]): string {
-  return `"${fmt(at[0])},${fmt(at[1])}"`;
-}
-
-/** Taps and swipes as Maestro commands. */
-export function maestroCommands(actions: readonly Action[]): string[] {
-  return actions.map((a) =>
-    'tap' in a
-      ? typeof a.tap === 'string'
-        ? `tapOn: ${JSON.stringify(a.tap)}`
-        : `tapOn:\n    point: ${pointArg(a.tap)}`
-      : `swipe:\n    start: ${pointArg(a.swipe.from)}\n    end: ${pointArg(a.swipe.to)}\n    duration: ${a.swipe.duration}`,
-  );
+/**
+ * Taps and swipes as Maestro commands. `px` turns a point into pixels. Element taps match the whole id or text;
+ * `index` counts in Maestro's order of the matches.
+ */
+export function maestroCommands(actions: readonly Action[], px: (at: Point) => [number, number]): string[] {
+  return actions.map((a) => {
+    if ('swipe' in a)
+      return `swipe:\n    start: ${xy(px(a.swipe.from))}\n    end: ${xy(px(a.swipe.to))}\n    duration: ${a.swipe.duration}`;
+    if (isPoint(a.tap)) return `tapOn:\n    point: ${xy(px(a.tap))}`;
+    const t = typeof a.tap === 'string' ? { label: a.tap } : a.tap;
+    const by = 'id' in t ? `id: ${regex(t.id)}` : `text: ${regex(t.label)}`;
+    return `tapOn:\n    ${by}${t.index === undefined ? '' : `\n    index: ${t.index}`}`;
+  });
 }

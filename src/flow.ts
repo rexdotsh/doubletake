@@ -18,6 +18,8 @@ export type FlowState = {
   consumed: Set<SdkEvent>;
   offset: number;
   launched?: Launched;
+  /** The bench's `alerts`: system prompt buttons input taps first. */
+  alerts?: readonly string[];
 };
 
 export async function launch(state: FlowState): Promise<Launched> {
@@ -50,7 +52,7 @@ export async function runSteps(steps: readonly Step[], state: FlowState): Promis
     await action();
   };
   const flush = async () => {
-    if (batch.length) await act(() => state.device.input(state.appId, batch));
+    if (batch.length) await act(() => state.device.input(state.appId, batch, state.alerts));
     batch = [];
   };
   for (const step of steps) {

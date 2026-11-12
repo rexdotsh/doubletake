@@ -35,7 +35,7 @@ The lesson is the one strobe states first: a number you cannot defend is not a r
 bun add -d doubletake        # or npm i -D doubletake; the CLI runs on Node 22.18+ or Bun
 ```
 
-The machine with the simulator or emulator needs Xcode (`xcrun simctl`) or the Android SDK (`adb`), plus `ffmpeg` for video, [AXe](https://github.com/cameroncooke/AXe) for taps and swipes on iOS (`brew install cameroncooke/axe/axe`), and [Maestro](https://maestro.mobile.dev) only for `maestro` steps and Android taps by text. `doubletake status` says what it found.
+The machine with the simulator or emulator needs Xcode (`xcrun simctl`) or the Android SDK (`adb`), plus `ffmpeg` for video, [AXe](https://github.com/cameroncooke/AXe) for taps and swipes on iOS (`brew install cameroncooke/axe/axe`), and [Maestro](https://maestro.mobile.dev) only for `maestro` steps and Android taps on an element. `doubletake status` says what it found.
 
 ## A bench file
 
@@ -62,7 +62,15 @@ A case is one of:
 - `run`: untimed `setup` steps, then timed `run` steps.
 - `idle`: untimed `setup`, then sit on the screen and measure CPU per second and requests: polling shows up here.
 
-Steps: `launch`, `terminate`, `{ open: url }` (deep link), `{ wait: 'mark:name' }`, `{ sleep: '2s' }`, `{ tap: [x, y] | 'text' }`, `{ swipe: { from, to } }`, `{ scroll: 'down', times }`, `{ maestro: 'flow.yaml' }`, `{ shell: '…' }`. Coordinates of 1 or less are fractions of the screen.
+Steps: `launch`, `terminate`, `{ open: url }` (deep link), `{ wait: 'mark:name' }`, `{ sleep: '2s' }`, `{ tap: … }`, `{ swipe: { from, to } }`, `{ scroll: 'down', times }`, `{ maestro: 'flow.yaml' }`, `{ shell: '…' }`.
+
+A tap takes a place or an element:
+
+- `[0.5, 0.8]`: fractions of the screen, 0 to 1. `{ points: [200, 640] }`: points on iOS, dp on Android.
+- `'Buy'` or `{ label: 'Buy' }`: the element with exactly that accessibility label (text on Android). `{ id: 'pack-card' }`: the element with that test ID.
+- `index` picks one of several matches, from 0: `{ id: 'pack-card', index: 2 }`. On iOS it counts top to bottom, then left to right; on Android, in Maestro's order.
+
+On iOS, an `open` step accepts the system's "Open in …?" prompt. Other system prompts (tracking, notifications) cover the app until answered: list the buttons to tap in the bench's `alerts`, such as `alerts: ['Ask App Not to Track', 'Allow']`, and doubletake answers them before each tap or swipe.
 
 ## In the app (optional)
 
@@ -146,7 +154,7 @@ Timed results are only as good as the machine is quiet. doubletake measures the 
 - **iOS UI frames.** Hitches and frame times need Instruments; doubletake does not read them yet, and refuses `frames.*` on iOS. JS frames come from the SDK.
 - **Cold starts are process-cold, not disk-cold.** Neither simctl nor an unrooted emulator can drop the OS file cache.
 - **JS hotspots in release builds.** Hermes's sampling profiler is not reachable in a release build; profile a dev build instead.
-- **Input does not wait for the screen to settle.** iOS taps and swipes go through [AXe](https://github.com/cameroncooke/AXe) and Android ones through `adb input`, in milliseconds each, and return when the gesture ends: follow them with a `wait` (a mark) or a `sleep` where the run must include what they start. A text tap matches an accessibility label exactly on iOS; on Android it goes through Maestro, which takes seconds to start, so keep text taps in `setup`.
+- **Input does not wait for the screen to settle.** iOS taps and swipes go through [AXe](https://github.com/cameroncooke/AXe) and Android ones through `adb input`, in milliseconds each, and return when the gesture ends: follow them with a `wait` (a mark) or a `sleep` where the run must include what they start. An element tap waits up to 10 s for its element. On Android it goes through Maestro, which takes seconds to start, so keep element taps in `setup`; with `alerts`, each iOS input batch first reads the accessibility tree (a fraction of a second).
 - **Shared CI runners.** Timing verdicts need a machine that runs one bench at a time.
 
 ## License

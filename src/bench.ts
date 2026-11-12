@@ -4,14 +4,15 @@ import { pathToFileURL } from 'node:url';
 import { METRICS, metricInfo } from './metrics.ts';
 import { get, isRecord } from './util.ts';
 
-type Point = [x: number, y: number];
+import type { Point, Target } from './device.ts';
+
 export type Step =
   | 'launch'
   | 'terminate'
   | { open: string }
   | { wait: string; timeout?: string }
   | { sleep: string }
-  | { tap: Point | string }
+  | { tap: Point | Target }
   | { swipe: { from: Point; to: Point; duration?: string } }
   | { scroll: 'down' | 'up'; times?: number }
   | { maestro: string; env?: Record<string, string> }
@@ -40,6 +41,11 @@ export type Bench = {
   app: { ios?: string; android?: string };
   cases: Record<string, Case>;
   runs?: number;
+  /**
+   * iOS system prompt buttons to tap when a prompt covers the app (tracking, notifications), in order of
+   * preference, such as `['Ask App Not to Track', 'Allow']`. `open` steps accept "Open in …?" on their own.
+   */
+  alerts?: string[];
   /** Fractions of the screen [x, y, w, h] that visual metrics ignore, such as a clock or a looping animation. */
   ignore?: [number, number, number, number][];
 };
@@ -113,10 +119,37 @@ function count(value: unknown, where: string): number {
   return value;
 }
 
-function point(value: unknown, where: string): Point {
+function pair(value: unknown, where: string): [number, number] {
   const [x, y, ...rest] = list(value, where);
-  if (typeof x !== 'number' || typeof y !== 'number' || rest.length) throw new Error(`${where}: a point is [x, y]`);
+  if (typeof x !== 'number' || typeof y !== 'number' || x < 0 || y < 0 || rest.length)
+    throw new Error(`${where}: a point is [x, y]`);
   return [x, y];
+}
+
+function point(value: unknown, where: string): Point {
+  if (isRecord(value)) return (keys(value, ['points'], where), { points: pair(value.points, where) });
+  const at = pair(value, where);
+  if (at.some((v) => v > 1))
+    throw new Error(`${where}: [x, y] is fractions of the screen, 0 to 1; write { points: [x, y] } for points`);
+  return at;
+}
+
+function index(value: unknown, where: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 0)
+    throw new Error(`${where}: index is a whole number ≥ 0 (0 is the first match)`);
+  return value;
+}
+
+function tapAt(value: unknown, where: string): Point | Target {
+  if (typeof value === 'string') return value;
+  if (isRecord(value) && 'id' in value)
+    return (keys(value, ['id', 'index'], where), { id: string(value.id, where), index: index(value.index, where) });
+  if (isRecord(value) && 'label' in value)
+    return (
+      keys(value, ['label', 'index'], where), { label: string(value.label, where), index: index(value.index, where) }
+    );
+  return point(value, where);
 }
 
 function duration(value: unknown, where: string): string {
@@ -140,7 +173,7 @@ function parseStep(value: unknown, where: string): Step {
       { wait: mark(s.wait, where), timeout: optional(s.timeout, (v) => duration(v, where)) }
     );
   if ('sleep' in s) return (keys(s, ['sleep'], where), { sleep: duration(s.sleep, where) });
-  if ('tap' in s) return (keys(s, ['tap'], where), { tap: typeof s.tap === 'string' ? s.tap : point(s.tap, where) });
+  if ('tap' in s) return (keys(s, ['tap'], where), { tap: tapAt(s.tap, where) });
   if ('swipe' in s) {
     keys(s, ['swipe'], where);
     const sw = object(s.swipe, `${where}.swipe`);
@@ -224,7 +257,7 @@ function region(value: unknown, where: string): [number, number, number, number]
 /** Parses an untrusted bench object once, at the edge, into a typed bench. */
 export function validate(raw: unknown): Bench {
   const bench = object(raw, 'bench');
-  keys(bench, ['app', 'cases', 'runs', 'ignore'], 'bench');
+  keys(bench, ['app', 'cases', 'runs', 'alerts', 'ignore'], 'bench');
   const app = object(bench.app ?? {}, 'app');
   keys(app, ['ios', 'android'], 'app');
   const cases = object(bench.cases, 'cases');
@@ -236,6 +269,7 @@ export function validate(raw: unknown): Bench {
     },
     cases: Object.fromEntries(Object.entries(cases).map(([name, c]) => [name, parseCase(c, `cases["${name}"]`)])),
     runs: optional(bench.runs, (v) => count(v, 'runs')),
+    alerts: optional(bench.alerts, (v) => list(v, 'alerts').map((b, i) => string(b, `alerts[${i}]`))),
     ignore: optional(bench.ignore, (v) => list(v, 'ignore').map((r, i) => region(r, `ignore[${i}]`))),
   };
 }

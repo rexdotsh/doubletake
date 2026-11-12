@@ -13,9 +13,19 @@ export type Launched = {
 
 type Memory = { endMiB?: number; peakMiB?: number };
 
-export type Action =
-  | { tap: [number, number] | string }
-  | { swipe: { from: [number, number]; to: [number, number]; duration: number } };
+/** A place on screen: fractions of it, `[0.5, 0.8]`, or `{ points: [x, y] }` (points on iOS, dp on Android). */
+export type Point = [x: number, y: number] | { points: [x: number, y: number] };
+
+/**
+ * An element: an accessibility label (a string), or `{ id }` / `{ label }`, exact matches. `index` picks one of
+ * several matches, counted from 0, top to bottom then left to right.
+ */
+export type Target = string | { id: string; index?: number } | { label: string; index?: number };
+
+export type Action = { tap: Point | Target } | { swipe: { from: Point; to: Point; duration: number } };
+
+export const isPoint = (at: Point | Target): at is Point =>
+  Array.isArray(at) || (typeof at === 'object' && 'points' in at);
 
 type Frames = { total: number; janky: number; p90: number };
 
@@ -61,8 +71,11 @@ export interface Device {
   openUrl(url: string): Promise<void>;
   /** UI frames since the last reset, where the platform reports them. */
   frames?: { reset(appId: string): Promise<void>; read(appId: string): Promise<Frames> };
-  /** Taps and swipes in order: AXe on the iOS Simulator, adb on Android (Maestro for a tap by text). */
-  input(appId: string, actions: readonly Action[]): Promise<void>;
+  /**
+   * Taps and swipes in order: AXe on the iOS Simulator, adb on Android (Maestro for a tap on an element).
+   * `alerts`: system prompt buttons to tap first when a prompt covers the app (iOS).
+   */
+  input(appId: string, actions: readonly Action[], alerts?: readonly string[]): Promise<void>;
   /** Reads what input needs (the screen's geometry) at an untimed moment, right before a timed window. */
   prepareInput?(): Promise<void>;
 }
