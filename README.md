@@ -150,7 +150,7 @@ cold start  ★ launch.ttfd  −17.4% [−17.9% … −16.9%]  faster  (8 pairs,
     cpu.time              2883 ms → 2550 ms    −11.57% [−11.99% … −11.01%]    faster
 ```
 
-The "slow" build blocks the main thread for 300 ms before the first screen and 4 ms per visible row; doubletake measured 337 ms, on the iPhone 17 simulator, marks from `sdk/swift`. A Jetpack Compose sample is next. What is planned (build from source, Macrobenchmark and XCTest metrics as backends, Perfetto and Instruments for attribution): [docs/native.md](docs/native.md).
+The "slow" build blocks the main thread for 300 ms before showing content, plus 4 ms each time a row's body is evaluated; the measured launch-time reduction is 337 ms (iPhone 17 simulator, marks from `sdk/swift`). A Jetpack Compose sample is next. What is planned (build from source, Macrobenchmark and XCTest metrics as backends, Perfetto and Instruments for attribution): [docs/native.md](docs/native.md).
 
 ## Running it
 
