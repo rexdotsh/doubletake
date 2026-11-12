@@ -30,7 +30,12 @@ function sh(
     // An ssh that exits early closes its stdin: the exit code reports that, not an unhandled EPIPE.
     child.stdin?.on('error', () => undefined);
     if (io.stdin && child.stdin) io.stdin.pipe(child.stdin);
-    if (io.stdout && child.stdout) child.stdout.pipe(io.stdout);
+    if (io.stdout && child.stdout) {
+      const out = child.stdout;
+      out.pipe(io.stdout);
+      // A consumer that fails (tar exiting early) unpipes and pauses the stream: drain it so ssh can finish.
+      io.stdout.once('error', () => out.resume());
+    }
     child.on('error', reject);
     child.on('close', (code) => done(code ?? 1));
   });
