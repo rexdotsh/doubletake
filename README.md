@@ -4,6 +4,8 @@ Compare two mobile builds with repeatable journeys, paired measurements, and evi
 
 doubletake installs two builds on the iOS Simulator or the Android Emulator, runs them in alternating pairs, and gives a verdict with an interval instead of a single number from one launch. It is a runner and a referee, not a profiler: it tells you whether head beat base, by how much, and how sure it is.
 
+Status: demonstrated on the iOS Simulator; Android is experimental. Timing needs a machine nothing else uses while the bench runs (see [Running it](#running-it)). `doubletake bundle`, the exact size of a Metro bundle by package, needs no device at all.
+
 ```
 $ doubletake bench perf/app.bench.ts --base before.app --head after.app
 
@@ -112,6 +114,7 @@ Exit codes: 0 done, 1 error, 4 a primary was refused, 5 not every primary decide
 
 - `<app>` is a `.app` built for the simulator, an `.apk`, or `installed:<bundle id>`.
 - `--host "ssh mac" --host-init ". ~/env.sh"` runs the whole bench on that machine: the CLI, the bench folder and the builds go over (builds once per content hash), the experiment comes back. Timestamps never cross SSH. `host:<path>` names a build already there.
+- `--queue <duration>`: how long the whole bench may wait for a quiet host (30 minutes by default).
 - `--side-by-side` (iOS) installs both builds as copies under `<bundle id>.doubletakebase` and `.doubletakehead`, ad-hoc signed without entitlements; both copies are uninstalled first, so each experiment starts from empty containers, and no block reinstalls. Apps with extensions and benches with deep links are refused (both copies claim the same URL schemes).
 - `--video <case>` films one more run per side after the pairs (never a timed one) and puts them side by side with a shared timer.
 - `report --format md` is the PR card; `--comment <pr>` posts it with `gh pr comment`, attaching the video.
@@ -128,6 +131,10 @@ Experiments live in `~/.doubletake/experiments/<id>/`: `result.json` (strobe-sha
 ## Native apps
 
 Swift and Kotlin apps get the same runs and verdicts: copy [`sdk/swift/Doubletake.swift`](sdk/swift/Doubletake.swift) or [`sdk/kotlin/Doubletake.kt`](sdk/kotlin/Doubletake.kt) into the app for marks, or use the metrics that need no SDK. [`examples/swiftui-sample`](examples/swiftui-sample) builds a SwiftUI app without an Xcode project and benches it. What is planned (build from source, Macrobenchmark and XCTest metrics as backends, Perfetto and Instruments for attribution): [docs/native.md](docs/native.md).
+
+## Running it
+
+Timed results are only as good as the machine is quiet. doubletake measures the other processes' CPU once a second and refuses a bench rather than report a number taken next to a build. On a shared machine, reserve it for the whole bench by wrapping the command in the host's own lock, for example `flock /tmp/mac.lock doubletake bench …`, and have builds and other benches take the same lock. `--queue 2h` lets a bench wait longer for a quiet host before it gives up (exit 4).
 
 ## What it can't do
 
