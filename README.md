@@ -27,6 +27,10 @@ doubletake was tried on a production React Native app (Expo, Hermes, a ~24 MB JS
 - `doubletake bundle` gave the exact change: −0.4 MB (−1.6%), almost all of it one web3 library that had been bundled in two module formats, and listed the libraries still bundled at two or three versions (another ~1.6 MB).
 - The first timed bench ran beside another Xcode build on the same Mac (load 94 on 10 cores): its pairs swung by ±12% and could not have been trusted. doubletake now samples the other processes' CPU once a second and refuses an experiment when they hold more than half the cores for 5 s during a block, which is what it did on every later attempt while that machine stayed shared.
 
+- Aligning that library and a schema library to one version each cut another 1.0 MB (−4.1%), again exact.
+- With the machine reserved by a host lock, and the bench's own app installs no longer counted as "other" load, the cold start decided at 8 pairs: CPU over the first 8 s **same (±2%)**, −0.8% [−1.9% … +0.6%]; peak memory 7.9% lower.
+- An idle check on the logged-out first screen read 0.1–0.17 of a core with nothing happening: a full-screen animated WebP looping forever. Making it play once: `cpu.idle` −54.8% [−57.4% … −51.6%], decided at 8 pairs. A video copy of the same animation saved only 9–15%.
+
 The lesson is the one strobe states first: a number you cannot defend is not a result. A refused bench on a busy machine is an answer.
 
 ## Install
@@ -138,7 +142,15 @@ Experiments live in `~/.doubletake/experiments/<id>/`: `result.json` (strobe-sha
 
 ## Native apps
 
-Swift and Kotlin apps get the same runs and verdicts: copy [`sdk/swift/Doubletake.swift`](sdk/swift/Doubletake.swift) or [`sdk/kotlin/Doubletake.kt`](sdk/kotlin/Doubletake.kt) into the app for marks, or use the metrics that need no SDK. [`examples/swiftui-sample`](examples/swiftui-sample) builds a SwiftUI app without an Xcode project and benches it. What is planned (build from source, Macrobenchmark and XCTest metrics as backends, Perfetto and Instruments for attribution): [docs/native.md](docs/native.md).
+Swift and Kotlin apps get the same runs and verdicts: copy [`sdk/swift/Doubletake.swift`](sdk/swift/Doubletake.swift) or [`sdk/kotlin/Doubletake.kt`](sdk/kotlin/Doubletake.kt) into the app for marks, or use the metrics that need no SDK. [`examples/swiftui-sample`](examples/swiftui-sample) builds a SwiftUI app without an Xcode project and benches it:
+
+```
+cold start  ★ launch.ttfd  −17.4% [−17.9% … −16.9%]  faster  (8 pairs, decided at 8 pairs)
+    slow 1939 ms · fast 1602 ms
+    cpu.time              2883 ms → 2550 ms    −11.57% [−11.99% … −11.01%]    faster
+```
+
+The "slow" build blocks the main thread for 300 ms before showing content, plus 4 ms each time a row's body is evaluated; the measured launch-time reduction is 337 ms (iPhone 17 simulator, marks from `sdk/swift`). A Jetpack Compose sample is next. What is planned (build from source, Macrobenchmark and XCTest metrics as backends, Perfetto and Instruments for attribution): [docs/native.md](docs/native.md).
 
 ## Running it
 
