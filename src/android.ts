@@ -105,6 +105,8 @@ function device(serial: string, adb: Adb, shell: (cmd: string) => Promise<string
   return {
     platform: 'android',
     id: serial,
+    // An emulator is a host process (qemu) started with its console port, which the serial carries.
+    hostMarkers: /^emulator-(\d+)$/.test(serial) ? [`-port ${serial.slice('emulator-'.length)}`] : [],
     name,
     os,
     async prepare() {

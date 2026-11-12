@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { type Action, type Device, type Recording, logTap } from './device.ts';
+import { psTime } from './host.ts';
 import { run, stop, stream, which } from './sh.ts';
 import { dig, isRecord } from './util.ts';
 
@@ -39,12 +40,6 @@ export async function listSimulators(): Promise<SimDevice[]> {
 
 async function plist(app: string, key: string): Promise<string> {
   return (await run('plutil', ['-extract', key, 'raw', '-o', '-', join(app, 'Info.plist')])).stdout.trim();
-}
-
-/** "1:02.34" or "1:02:03.45" (ps time) to ms. */
-export function psTime(text: string): number {
-  const parts = text.trim().split(':').map(Number);
-  return Math.round(parts.reduce((total, part) => total * 60 + part, 0) * 1000);
 }
 
 // A simulator app is a host process, so its exec time is in the host's process table, to the microsecond.
@@ -129,6 +124,7 @@ function simulator(udid: string, name: string, os: string, axe: string | undefin
   return {
     platform: 'ios',
     id: udid,
+    hostMarkers: [udid],
     name,
     os,
     async prepare() {

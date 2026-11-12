@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import { validate } from '../src/bench.ts';
 import { countersIn, marksIn, parseSdkLine } from '../src/events.ts';
-import { psTime } from '../src/ios.ts';
+import { psTime } from '../src/host.ts';
 import { visualTimes } from '../src/visual.ts';
 
 test('SDK lines parse whatever the logger put before them', () => {
@@ -63,6 +63,7 @@ test('bench files are checked with the nearest key', () => {
 test('ps time reads minutes and hours', () => {
   expect(psTime('0:01.23')).toBe(1230);
   expect(psTime('1:02:03.50')).toBe(3723500);
+  expect(psTime('2-00:00:01')).toBe(172801000);
 });
 
 function frame(level: number): Uint8Array {
