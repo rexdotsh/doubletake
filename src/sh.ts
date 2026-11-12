@@ -27,6 +27,8 @@ export function run(
         reject(new Error(`${cmd} ${args.join(' ')}: ${why.split('\n').slice(-5).join('\n')}`));
       } else resolve(result);
     });
+    // A command that exits without reading its input (missing, or done early) closes the pipe: not an error.
+    child.stdin.on('error', () => undefined);
     child.stdin.end(options.input ?? '');
   });
 }
