@@ -5,6 +5,9 @@ import type { Experiment, Series } from './store.ts';
 
 const MINUS = '\u2212';
 
+/** `1 measured run`, `3 measured runs`. */
+const count = (n: number, noun: string) => `${n} ${noun}${n === 1 ? '' : 's'}`;
+
 function signed(shown: string, x: number): string {
   return x < 0 ? `${MINUS}${shown.replace('-', '')}` : x > 0 ? `+${shown}` : shown;
 }
@@ -149,7 +152,7 @@ export function card(e: Experiment): string {
     '<details><summary>Method</summary>',
     '',
     `- ${deviceLine(e)}; doubletake ${pkg.version}.`,
-    `- ${e.series.map((s) => `${s.case}: ${s.pairs} pairs (${s.stopped})`).join('; ')}. Pairs alternate ${base}, ${head} then ${head}, ${base}, after one discarded warm-up block per side; ${plan.runs} measured runs per block (median), ${plan.warmup_runs} discarded run first; ${plan.install} installs.`,
+    `- ${e.series.map((s) => `${s.case}: ${s.pairs} pairs (${s.stopped})`).join('; ')}. Pairs alternate ${base}, ${head} then ${head}, ${base}, after one discarded warm-up block per side; ${count(plan.runs, 'measured run')} per block${plan.runs > 1 ? ' (median)' : ''}, ${plan.warmup_runs ? `${count(plan.warmup_runs, 'discarded run')} first` : 'no discarded run'}; ${plan.install} installs.`,
     `- Change: mean of the paired log ratios (or differences), with a bootstrap interval (10,000 resamples, expanded percentile) at ${plan.pairs === 'auto' ? '98.42% at each planned look (8, 12, 18, 26, 40 pairs)' : '95%'} for the primary; a direction also needs the signed-rank test to agree.`,
     '- ★ is the primary, declared before the run. Declared secondaries get words only after it decided, at a Bonferroni level (95% across them); `·` is descriptive (95%).',
     ...(refused.length ? [`- Not measured: ${refused.join(', ')}.`] : []),
