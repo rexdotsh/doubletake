@@ -27,6 +27,8 @@ function sh(
     const child = spawn('sh', ['-c', `${host.ssh} "$1"`, 'sh', full], {
       stdio: [io.stdin ? 'pipe' : 'ignore', io.stdout ? 'pipe' : io.inherit ? 'inherit' : 'ignore', 'inherit'],
     });
+    // An ssh that exits early closes its stdin: the exit code reports that, not an unhandled EPIPE.
+    child.stdin?.on('error', () => undefined);
     if (io.stdin && child.stdin) io.stdin.pipe(child.stdin);
     if (io.stdout && child.stdout) child.stdout.pipe(io.stdout);
     child.on('error', reject);
@@ -120,6 +122,7 @@ async function fetchExperiment(host: Host, id: string): Promise<void> {
   const local = join(home(), 'experiments');
   await mkdir(local, { recursive: true });
   const untar = spawn('tar', ['-xzf', '-', '-C', local], { stdio: ['pipe', 'ignore', 'inherit'] });
+  untar.stdin.on('error', () => undefined);
   const untarred = new Promise<number>((done) => untar.on('close', (status) => done(status ?? 1)));
   const sent = await sh(host, `cd ${REMOTE}/experiments && COPYFILE_DISABLE=1 tar -czf - ${q(id)}`, {
     stdout: untar.stdin,
