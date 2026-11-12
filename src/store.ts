@@ -127,16 +127,22 @@ export async function lockDevice(device: string): Promise<() => Promise<void>> {
   await mkdir(dir, { recursive: true });
   const file = join(dir, `${device.replace(/[^\w.-]/g, '_')}.pid`);
   const mine = String(process.pid);
-  try {
-    await writeFile(file, mine, { flag: 'wx' });
-  } catch (error) {
-    if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
-    const holder = Number(await readFile(file, 'utf8').catch(() => ''));
-    const why =
-      holder && !alive(holder)
-        ? `a stale lock from pid ${holder}, which is gone: remove ${file} if no bench is running`
-        : `in use by pid ${holder || '?'}`;
-    throw new Error(`device ${device} is locked (${why}): one bench per device at a time`, { cause: error });
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await writeFile(file, mine, { flag: 'wx' });
+      break;
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST')) throw error;
+      const holder = Number(await readFile(file, 'utf8').catch(() => ''));
+      // A bench that was killed leaves its lock behind; its pid being gone is the proof, so take it over once.
+      if (holder && !alive(holder) && attempt === 0) {
+        await rm(file, { force: true });
+        continue;
+      }
+      throw new Error(`device ${device} is locked (in use by pid ${holder || '?'}): one bench per device at a time`, {
+        cause: error,
+      });
+    }
   }
   return async () => {
     if ((await readFile(file, 'utf8').catch(() => '')) === mine) await rm(file, { force: true });

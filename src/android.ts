@@ -153,7 +153,11 @@ function device(serial: string, adb: Adb, shell: (cmd: string) => Promise<string
         ttid: totalTime,
       };
     },
-    cpuMs: async (pid) => timePlus((await shell(`ps -o TIME+= -p ${pid}`)).trim().split('\n').at(-1) ?? '0'),
+    async cpuMs(pid) {
+      const time = (await shell(`ps -o TIME+= -p ${pid}`)).trim().split('\n').at(-1) ?? '';
+      if (!/^[\d:.]+$/.test(time)) throw new Error(`the app (pid ${pid}) is gone: it crashed or was terminated`);
+      return timePlus(time);
+    },
     async memory(pid) {
       const meminfo = parseMeminfo(await shell(`dumpsys meminfo ${pid}`));
       const hwm = /VmHWM:\s*(\d+)/.exec(await shell(`cat /proc/${pid}/status 2>/dev/null || true`))?.[1];
