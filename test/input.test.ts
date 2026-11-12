@@ -12,10 +12,13 @@ const px = (at: [number, number] | { points: [number, number] }): [number, numbe
 const frame = (x: number, y: number, width = 100, height = 40) => ({ x, y, width, height });
 
 // Shaped like `axe describe-ui` while iOS asks "Open in …?": SpringBoard, an application without a label.
+const SB = 42;
+
 const springboard = [
   {
     type: 'Application',
     AXLabel: ' ',
+    pid: SB,
     frame: frame(0, 0, 402, 874),
     children: [
       {
@@ -35,26 +38,33 @@ const springboard = [
 const app = [
   {
     type: 'Application',
-    AXLabel: 'App',
+    AXLabel: '',
+    pid: 7,
     frame: frame(0, 0, 402, 874),
     children: [
       { type: 'Button', AXLabel: 'Pack', AXUniqueId: 'pack-card', frame: frame(220, 300) },
       { type: 'Button', AXLabel: 'Pack', AXUniqueId: 'pack-card', frame: frame(20, 300) },
-      { type: 'Button', AXLabel: 'Pack', AXUniqueId: 'pack-card', frame: frame(20, 100) },
+      {
+        type: 'Button',
+        AXLabel: 'Pack',
+        AXUniqueId: 'pack-card',
+        frame: frame(20, 100),
+        children: [{ type: 'StaticText', AXLabel: 'Pack', AXUniqueId: 'pack-card', frame: frame(25, 105, 50, 20) }],
+      },
       { type: 'Alert', AXLabel: 'In-app alert', frame: frame(40, 400) },
     ],
   },
 ];
 
-test('a system prompt is read from SpringBoard, an in-app alert is not one', () => {
-  const prompt = promptOf(parseTree(springboard));
+test('a system prompt is read from SpringBoard, an in-app alert is not one, even in an unlabelled app', () => {
+  const prompt = promptOf(parseTree(springboard, SB));
   expect(prompt?.text).toBe('Open in “App”?');
   expect(prompt?.buttons.map((b) => b.label)).toEqual(['Cancel', 'Open']);
-  expect(promptOf(parseTree(app))).toBeUndefined();
+  expect(promptOf(parseTree(app, SB))).toBeUndefined();
 });
 
-test('matches count top to bottom, then left to right', () => {
-  const { elements } = parseTree(app);
+test('matches count top to bottom, then left to right, a button and its own text once', () => {
+  const { elements } = parseTree(app, SB);
   expect(find(elements, { id: 'pack-card' }).map((e) => [e.frame.x, e.frame.y])).toEqual([
     [20, 100],
     [20, 300],
@@ -72,6 +82,8 @@ test('a bench says which unit a point is in, and how to pick one of several elem
   expect(() => tap([200, 400])).toThrow(/write \{ points: \[x, y\] \} for points/);
   expect(() => tap({ id: 'pack-card', index: -1 })).toThrow(/index is a whole number/);
   expect(() => tap({ id: 'a', label: 'b' })).toThrow(/unknown key label/);
+  expect(() => tap([Number.NaN, 0.5])).toThrow(/two numbers/);
+  expect(() => tap({ points: [Number.POSITIVE_INFINITY, 10] })).toThrow(/two numbers/);
   expect(tap({ points: [200, 400] }).cases.a?.run).toEqual([{ tap: { points: [200, 400] } }]);
   expect(tap({ id: 'pack-card', index: 2 }).cases.a?.run).toEqual([{ tap: { id: 'pack-card', index: 2 } }]);
   expect(validate({ alerts: ['Allow'], cases: { a: { launch: {}, primary: 'launch.ttid' } } }).alerts).toEqual([

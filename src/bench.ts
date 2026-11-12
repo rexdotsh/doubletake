@@ -121,9 +121,9 @@ function count(value: unknown, where: string): number {
 
 function pair(value: unknown, where: string): [number, number] {
   const [x, y, ...rest] = list(value, where);
-  if (typeof x !== 'number' || typeof y !== 'number' || x < 0 || y < 0 || rest.length)
-    throw new Error(`${where}: a point is [x, y]`);
-  return [x, y];
+  if (!Number.isFinite(x) || !Number.isFinite(y) || Number(x) < 0 || Number(y) < 0 || rest.length)
+    throw new Error(`${where}: a point is [x, y], two numbers ≥ 0`);
+  return [Number(x), Number(y)];
 }
 
 function point(value: unknown, where: string): Point {

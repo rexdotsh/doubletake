@@ -70,7 +70,7 @@ A tap takes a place or an element:
 - `'Buy'` or `{ label: 'Buy' }`: the element with exactly that accessibility label (text on Android). `{ id: 'pack-card' }`: the element with that test ID.
 - `index` picks one of several matches, from 0: `{ id: 'pack-card', index: 2 }`. On iOS it counts top to bottom, then left to right; on Android, in Maestro's order.
 
-On iOS, an `open` step accepts the system's "Open in …?" prompt. Other system prompts (tracking, notifications) cover the app until answered: list the buttons to tap in the bench's `alerts`, such as `alerts: ['Ask App Not to Track', 'Allow']`, and doubletake answers them before each tap or swipe.
+On iOS, an `open` step accepts the system's "Open in …?" prompt; it reads the screen until the prompt is answered or an app is in front (about half a second, 3 s at most), which counts in a timed run. Other system prompts (tracking, notifications) cover the app until answered: list the buttons to tap in the bench's `alerts`, such as `alerts: ['Ask App Not to Track', 'Allow']`, and doubletake answers them before each tap or swipe.
 
 ## In the app (optional)
 
