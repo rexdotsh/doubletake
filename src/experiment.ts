@@ -30,6 +30,8 @@ export type BenchOptions = {
   log: (line: string) => void;
   /** Film one extra block per side of this case after the pairs and put them side by side. */
   video?: string;
+  /** How long the experiment may wait for a quiet host in all, and how long it has. */
+  queue: { budgetMs: number; waitedMs: number };
 };
 
 function caseOf(bench: Bench, name: string): Case {
@@ -50,25 +52,31 @@ async function install(o: BenchOptions, v: Variant): Promise<void> {
 
 /** Other processes using more than this share of the host's cores compete with the app for CPU. */
 const BUSY_SHARE = 0.5;
-const QUIET_WAIT_MS = 30 * 60_000;
 
 const limit = () => cpus().length * BUSY_SHARE;
 
 const isDevice = (o: Pick<BenchOptions, 'device'>) => (command: string) => o.device.isHostProcess(command);
 
-/** Waits until other processes use under half the host's cores over 5 s; refuses after 30 minutes. */
+/**
+ * Waits until other processes use under half the host's cores over 5 s. All waits of one experiment share one
+ * budget (`--queue`, 30 minutes by default); past it, the experiment is refused with what was measured.
+ */
 async function quiet(o: BenchOptions): Promise<void> {
-  const deadline = Date.now() + QUIET_WAIT_MS;
+  const started = Date.now();
   let said = false;
   for (;;) {
     const before = await snapshot(isDevice(o));
     await sleep(5000);
     const cores = coresBetween(before, await snapshot(isDevice(o)));
-    if (cores <= limit()) return;
-    if (Date.now() > deadline)
+    const waited = Date.now() - started;
+    if (cores <= limit()) {
+      o.queue.waitedMs += waited;
+      return;
+    }
+    if (o.queue.waitedMs + waited > o.queue.budgetMs)
       throw new Refusal(
         'Background',
-        `other processes kept ${cores.toFixed(1)} of ${cpus().length} cores busy for 30 minutes: something else is using the machine`,
+        `other processes still used ${cores.toFixed(1)} of ${cpus().length} cores (limit ${limit()}) after ${Math.round((o.queue.waitedMs + waited) / 60_000)} min of waiting: run where nothing else runs, or wrap the bench in the host's lock; the runs so far are in runs.ndjson`,
       );
     if (!said)
       o.log(`waiting for the host to go quiet: other processes use ${cores.toFixed(1)} cores, limit ${limit()}`);

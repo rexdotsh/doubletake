@@ -52,12 +52,12 @@ export function caseKind(c: Case): CaseKind {
   return 'run';
 }
 
-const UNITS: Record<string, number> = { ms: 1, s: 1000, m: 60_000 };
+const UNITS: Record<string, number> = { ms: 1, s: 1000, m: 60_000, h: 3_600_000 };
 
 export function ms(text: string): number {
-  const match = /^(\d+(?:\.\d+)?)(ms|s|m)$/.exec(text.trim());
+  const match = /^(\d+(?:\.\d+)?)(ms|s|m|h)$/.exec(text.trim());
   const unit = match?.[2] === undefined ? undefined : UNITS[match[2]];
-  if (!match || unit === undefined) throw new Error(`a duration needs its unit (500ms, 2s, 1m): ${text}`);
+  if (!match || unit === undefined) throw new Error(`a duration needs its unit (500ms, 2s, 1m, 2h): ${text}`);
   return Number(match[1]) * unit;
 }
 

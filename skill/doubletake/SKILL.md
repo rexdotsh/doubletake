@@ -21,7 +21,7 @@ Never put a `check` value or a single launch in a results table: only `bench` ve
 
 ## The machine
 
-- Run one bench at a time per machine, and nothing heavy beside it (builds, other simulators, screen recording of something else).
+- Run one bench at a time per machine, and nothing heavy beside it (builds, other simulators, screen recording of something else). On a shared machine, wrap the bench in the host's lock (`flock … doubletake bench …`); doubletake refuses (exit 4) when other processes hold more than half the cores, and `--queue` sets how long it waits for quiet.
 - A Mac over SSH: `--host "ssh mac" --host-init ". ~/env.sh"`; `host:<path>` for builds already there. Everything runs on the Mac; results come back.
 - `doubletake status` lists simulators, emulators and tools.
 
@@ -45,7 +45,7 @@ export default {
 
 ## Picking a primary
 
-- App without the SDK: `cpu.time` (launch to a fixed hold: low noise, sensitive to JS bundle work), `memory.peak`, `launch.visual` (needs a screen that stops moving; `ignore` regions otherwise), `cpu.idle`.
+- App without the SDK: `cpu.time` (the app's CPU from launch to a fixed hold; on a starved machine less work finishes in the hold, so it needs a quiet host as much as wall time does), `memory.peak`, `launch.visual` (needs a screen that stops moving; `ignore` regions otherwise), `cpu.idle`.
 - With the SDK (`import { start, mark } from 'doubletake/sdk'`): `launch.ttfd` to a mark, `js.stall` for scrolls, `net.requests` (exact) for polling.
 - Android adds `launch.ttid` (`am start -W`) and `frames.janky` (`gfxinfo`).
 

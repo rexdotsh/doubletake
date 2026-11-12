@@ -28,7 +28,8 @@
   "files": [
     "dist",
     "skill",
-    "schema"
+    "sdk/swift",
+    "sdk/kotlin"
   ],
   "type": "module",
   "exports": {

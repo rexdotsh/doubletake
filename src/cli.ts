@@ -3,7 +3,7 @@ import { cpus, totalmem } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import pkg from '../package.json' with { type: 'json' };
-import { type Bench, loadBench } from './bench.ts';
+import { type Bench, loadBench, ms } from './bench.ts';
 import type { Device } from './device.ts';
 import { Refusal } from './device.ts';
 import { androidDevice } from './android.ts';
@@ -41,6 +41,7 @@ const USAGE = `doubletake ${pkg.version}: A/B performance for React Native apps 
   --video [case]          after the pairs, film one more run per side and put them side by side
   --side-by-side          iOS: install both builds as copies under <bundle id>.doubletake{base,head}, so both stay
                           installed (no reinstall per block); copies have no entitlements and fresh containers
+  --queue <duration>      how long the whole bench may wait for a quiet host (default 30m), then exit 4
   --fail-on-regression    exit 6 when a primary is worse (CI)
   --json                  print the experiment record
 
@@ -61,6 +62,7 @@ type Flags = {
   'host-init'?: string;
   id?: string;
   video?: string;
+  queue?: string;
   'side-by-side'?: boolean;
   'fail-on-regression'?: boolean;
   json?: boolean;
@@ -85,6 +87,7 @@ const OPTIONS = {
   'host-init': { type: 'string' },
   id: { type: 'string' },
   video: { type: 'string' },
+  queue: { type: 'string' },
   'side-by-side': { type: 'boolean' },
   'fail-on-regression': { type: 'boolean' },
   json: { type: 'boolean' },
@@ -177,7 +180,7 @@ async function remote(command: 'bench' | 'check', file: string, ssh: string, fla
       .filter(Boolean)
       .map((s) => basename((s ?? '').replace(/^host:/, '')).replace(/\.(app|apk)\/?$/, ''))
       .join(',');
-  const passthrough = (['pairs', 'runs', 'warmup', 'device', 'video'] as const).flatMap((k) => {
+  const passthrough = (['pairs', 'runs', 'warmup', 'device', 'video', 'queue'] as const).flatMap((k) => {
     const v = flags[k];
     return v ? [`--${k}`, v] : [];
   });
@@ -272,7 +275,8 @@ async function measure(command: 'bench' | 'check', file: string | undefined, fla
     warnings: [],
   };
   log(`doubletake ${id}: ${device.name} (${device.os}), ${cases.length} case(s), results in ${dir}`);
-  const common = { device, bench: loaded, file: resolve(file), cases, head, runs, dir, experiment, log };
+  const queue = { budgetMs: flags.queue ? ms(flags.queue) : 30 * 60_000, waitedMs: 0 };
+  const common = { device, bench: loaded, file: resolve(file), cases, head, runs, dir, experiment, log, queue };
   if (flags.video && !cases.includes(flags.video))
     throw new Error(`--video ${flags.video}: no such case (${cases.join(', ')})`);
   const done =
