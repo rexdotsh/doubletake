@@ -50,8 +50,8 @@ async function install(o: Pick<BenchOptions, 'device'>, v: Variant): Promise<voi
   else if (!(await o.device.isInstalled(v.appId))) throw new Error(`${v.appId} is not installed on ${o.device.name}`);
 }
 
-const busyWith = (others: Others) =>
-  others.top.map((t) => `${t.name} ${t.cores.toFixed(1)}`).join(', ') || 'nothing that stayed between samples';
+const busyWith = (top: Others['top']) =>
+  top.map((t) => `${t.name} ${t.cores.toFixed(1)}`).join(', ') || 'nothing that stayed between samples';
 
 /** Other processes using more than this share of the host's cores compete with the app for CPU. */
 const BUSY_SHARE = 0.5;
@@ -72,9 +72,9 @@ async function quiet(o: BenchOptions): Promise<void> {
     await sleep(5000);
     const after = await snapshot(isDevice(o));
     const cores = coresBetween(before, after);
-    const byProgram = new Map<string, number>();
-    addByProgram(before, after, byProgram);
-    const busy = busyWith(summarize([{ ms: after.at - before.at, cores }], byProgram));
+    const programs = new Map<string, number>();
+    addByProgram(before, after, programs);
+    const busy = busyWith(summarize([{ ms: after.at - before.at, cores, programs }]).top);
     const waited = Date.now() - started;
     if (cores <= limit()) {
       o.queue.waitedMs += waited;
@@ -105,7 +105,7 @@ async function watched<T>(o: Pick<BenchOptions, 'device' | 'dir'>, at: object, m
   const save = (others: Others, failed: boolean) =>
     appendFile(
       join(o.dir, 'blocks.ndjson'),
-      `${JSON.stringify({ ...at, ...(failed && { failed }), others_mean_cores: round2(others.mean), others_busiest_5s_cores: round2(others.busiest), others_top: others.top.map((t) => ({ name: t.name, cores: round2(t.cores) })), cores: cpus().length })}\n`,
+      `${JSON.stringify({ ...at, ...(failed && { failed }), others_mean_cores: round2(others.mean), others_busiest_5s_cores: round2(others.busiest), others_top: others.top.map((t) => ({ name: t.name, cores: round2(t.cores) })), others_busiest_top: others.busiestTop.map((t) => ({ name: t.name, cores: round2(t.cores) })), cores: cpus().length })}\n`,
     );
   const result = await measure().catch(async (error: unknown) => {
     await watch
@@ -134,7 +134,7 @@ async function block(o: BenchOptions, name: string, c: Case, v: Variant, tag: st
   if (others.busiest > limit())
     throw new Refusal(
       'Background',
-      `${name} ${tag} ${v.role}: other processes used ${others.busiest.toFixed(1)} of ${cpus().length} cores for 5 s during the block (over the block, in cores: ${busyWith(others)}): something else is using the machine`,
+      `${name} ${tag} ${v.role}: other processes used ${others.busiest.toFixed(1)} of ${cpus().length} cores for 5 s during the block (in those 5 s, in cores: ${busyWith(others.busiestTop)}; over the block: ${busyWith(others.top)}): something else is using the machine`,
     );
   return result;
 }
@@ -377,7 +377,7 @@ async function check(o: Omit<BenchOptions, 'base' | 'pairs' | 'warmup'>): Promis
     );
     if (others.busiest > limit())
       o.experiment.warnings.push(
-        `${name}: other processes used ${others.busiest.toFixed(1)} of ${cpus().length} cores for 5 s during it (${busyWith(others)}): values from a busy machine`,
+        `${name}: other processes used ${others.busiest.toFixed(1)} of ${cpus().length} cores for 5 s during it (${busyWith(others.busiestTop)}): values from a busy machine`,
       );
     o.experiment.checks.push({ case: name, values: b.values, refused: b.refused });
     o.log(

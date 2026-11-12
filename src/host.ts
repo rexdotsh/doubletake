@@ -70,11 +70,16 @@ export function coresBetween(a: CpuSnapshot, b: CpuSnapshot): number {
   return ms / Math.max(1, b.at - a.at);
 }
 
+type Top = { name: string; cores: number }[];
+
 /**
- * Other processes' CPU over a block, in cores: the mean, the busiest 5-second stretch, and the three programs
- * that used the most (by executable name, averaged over the block).
+ * Other processes' CPU over a block, in cores: the mean and the busiest 5-second stretch, each with the three
+ * programs (by executable name) that used the most in it.
  */
-export type Others = { mean: number; busiest: number; top: { name: string; cores: number }[] };
+export type Others = { mean: number; busiest: number; top: Top; busiestTop: Top };
+
+/** One sampling interval: its length, other processes' cores, and CPU ms per program. */
+export type Interval = { ms: number; cores: number; programs?: ReadonlyMap<string, number> };
 
 /** The file name of an executable's path: `/a/b c/qemu-system-aarch64` gives `qemu-system-aarch64`. */
 export const programOf = (path: string) => path.split('/').pop() ?? '';
@@ -91,15 +96,15 @@ export function addByProgram(a: CpuSnapshot, b: CpuSnapshot, into: Map<string, n
 
 export function watchOthers(isDevice: (command: string) => boolean): { stop(): Promise<Others> } {
   const state: { running: boolean; error?: unknown } = { running: true };
-  const intervals: { ms: number; cores: number }[] = [];
-  const byProgram = new Map<string, number>();
+  const intervals: Interval[] = [];
   const loop = (async () => {
     let previous = await snapshot(isDevice);
     while (state.running) {
       await sleep(1000);
       const next = await snapshot(isDevice);
-      intervals.push({ ms: next.at - previous.at, cores: coresBetween(previous, next) });
-      addByProgram(previous, next, byProgram);
+      const programs = new Map<string, number>();
+      addByProgram(previous, next, programs);
+      intervals.push({ ms: next.at - previous.at, cores: coresBetween(previous, next), programs });
       previous = next;
     }
   })().catch((error: unknown) => {
@@ -111,40 +116,60 @@ export function watchOthers(isDevice: (command: string) => boolean): { stop(): P
       state.running = false;
       await loop;
       if (state.error) throw state.error;
-      return summarize(intervals, byProgram);
+      return summarize(intervals);
     },
   };
 }
 
-export function summarize(
-  intervals: readonly { ms: number; cores: number }[],
-  byProgram: ReadonlyMap<string, number> = new Map(),
-): Others {
+/** The three programs that used the most over these intervals, in cores. */
+function topOf(intervals: readonly Interval[]): Top {
+  const ms = Math.max(
+    1,
+    intervals.reduce((sum, i) => sum + i.ms, 0),
+  );
+  const total = new Map<string, number>();
+  for (const i of intervals) for (const [name, cpu] of i.programs ?? []) total.set(name, (total.get(name) ?? 0) + cpu);
+  return [...total]
+    .toSorted((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([name, cpu]) => ({ name, cores: cpu / ms }));
+}
+
+export function summarize(intervals: readonly Interval[]): Others {
   const ms = Math.max(
     1,
     intervals.reduce((sum, i) => sum + i.ms, 0),
   );
   const mean = intervals.reduce((sum, i) => sum + i.cores * i.ms, 0) / ms;
-  const top = [...byProgram]
-    .toSorted((a, b) => b[1] - a[1])
-    .slice(0, 3)
-    .map(([name, cpu]) => ({ name, cores: cpu / ms }));
-  return { mean, busiest: busiest(intervals, 5000), top };
+  const window = busiestWindow(intervals, 5000);
+  return {
+    mean,
+    busiest: window.cores,
+    top: topOf(intervals),
+    busiestTop: topOf(intervals.slice(window.from, window.to)),
+  };
 }
 
 /** The highest average over any run of consecutive intervals spanning at least `span` ms (or all of them). */
-export function busiest(intervals: readonly { ms: number; cores: number }[], span: number): number {
-  let best = 0;
+export function busiest(intervals: readonly Interval[], span: number): number {
+  return busiestWindow(intervals, span).cores;
+}
+
+/** The busiest run of intervals, `intervals.slice(from, to)`, and its average cores. */
+function busiestWindow(intervals: readonly Interval[], span: number): { cores: number; from: number; to: number } {
+  let best = { cores: 0, from: 0, to: 0 };
   for (let i = 0; i < intervals.length; i++) {
     let ms = 0;
     let work = 0;
-    for (let j = i; j < intervals.length && ms < span; j++) {
+    let j = i;
+    for (; j < intervals.length && ms < span; j++) {
       const interval = intervals[j];
       if (!interval) break;
       ms += interval.ms;
       work += interval.cores * interval.ms;
     }
-    if (ms >= span || i === 0) best = Math.max(best, work / Math.max(1, ms));
+    const cores = work / Math.max(1, ms);
+    if ((ms >= span || i === 0) && (cores > best.cores || i === 0)) best = { cores, from: i, to: j };
   }
   return best;
 }

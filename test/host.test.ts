@@ -67,7 +67,7 @@ test('a block records the mean beside the busiest 5 s', () => {
     ...Array.from({ length: 10 }, () => ({ ms: 1000, cores: 1 })),
     ...Array.from({ length: 5 }, () => ({ ms: 1000, cores: 4 })),
   ];
-  expect(summarize(intervals)).toEqual({ mean: 2, busiest: 4, top: [] });
+  expect(summarize(intervals)).toEqual({ mean: 2, busiest: 4, top: [], busiestTop: [] });
 });
 
 test('other work is named by program, summed over its processes', () => {
@@ -89,7 +89,7 @@ test('other work is named by program, summed over its processes', () => {
   const byProgram = new Map<string, number>();
   addByProgram(a, b, byProgram);
   expect(programOf('/Applications/Android Studio.app/Contents/jbr/bin/java')).toBe('java');
-  expect(summarize([{ ms: 2000, cores: 2.5 }], byProgram).top).toEqual([
+  expect(summarize([{ ms: 2000, cores: 2.5, programs: byProgram }]).top).toEqual([
     { name: 'java', cores: 1.5 },
     { name: 'qemu-system-aarch64', cores: 1 },
   ]);
@@ -102,4 +102,20 @@ test('a program is named by its executable, even with spaces in the path', () =>
   const byProgram = new Map<string, number>();
   addByProgram(a, b, byProgram);
   expect([...byProgram]).toEqual([['java', 500]]);
+});
+
+test('the busiest 5 s names what used the most in them, not over the block', () => {
+  const quiet = { ms: 1000, cores: 1, programs: new Map([['emulator', 1000]]) };
+  const burst = {
+    ms: 1000,
+    cores: 6,
+    programs: new Map([
+      ['emulator', 1000],
+      ['mds', 5000],
+    ]),
+  };
+  const seen = summarize([...Array.from({ length: 20 }, () => quiet), ...Array.from({ length: 5 }, () => burst)]);
+  expect(seen.top[0]?.name).toBe('emulator');
+  expect(seen.busiestTop.map((t) => t.name)).toEqual(['mds', 'emulator']);
+  expect(seen.busiest).toBe(6);
 });
