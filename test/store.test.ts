@@ -12,7 +12,11 @@ test("a killed bench's device lock is taken over; a live one is not", async () =
     await writeFile(join(home, 'locks', 'sim.pid'), '999999999');
     const release = await lockDevice('sim');
     await writeFile(join(home, 'locks', 'other.pid'), String(process.ppid));
-    await expect(lockDevice('other')).rejects.toThrow(/in use by pid/);
+    const refused = await lockDevice('other').then(
+      () => '',
+      (error: unknown) => String(error),
+    );
+    expect(refused).toMatch(/in use by pid/);
     await release();
   } finally {
     if (before === undefined) delete process.env.DOUBLETAKE_HOME;
