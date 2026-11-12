@@ -4,7 +4,7 @@ Compare two mobile builds with repeatable journeys, paired measurements, and evi
 
 doubletake installs two builds on the iOS Simulator or the Android Emulator, runs them in alternating pairs, and gives a verdict with an interval instead of a single number from one launch. It is a runner and a referee, not a profiler: it tells you whether head beat base, by how much, and how sure it is.
 
-Status: demonstrated on the iOS Simulator; Android is experimental. Timing needs a machine nothing else uses while the bench runs (see [Running it](#running-it)). `doubletake bundle`, the exact size of a Metro bundle by package, needs no device at all.
+Status: demonstrated on the iOS Simulator and the Android Emulator (the Compose sample; a production app's Android bench is still to come). Timing needs a machine nothing else uses while the bench runs (see [Running it](#running-it)). `doubletake bundle`, the exact size of a Metro bundle by package, needs no device at all.
 
 ```
 $ doubletake bench perf/app.bench.ts --base before.app --head after.app
@@ -150,7 +150,15 @@ cold start  ★ launch.ttfd  −17.4% [−17.9% … −16.9%]  faster  (8 pairs,
     cpu.time              2883 ms → 2550 ms    −11.57% [−11.99% … −11.01%]    faster
 ```
 
-The "slow" build blocks the main thread for 300 ms before showing content, plus 4 ms each time a row's body is evaluated; the measured launch-time reduction is 337 ms (iPhone 17 simulator, marks from `sdk/swift`). A Jetpack Compose sample is next. What is planned (build from source, Macrobenchmark and XCTest metrics as backends, Perfetto and Instruments for attribution): [docs/native.md](docs/native.md).
+The "slow" build blocks the main thread for 300 ms before showing content, plus 4 ms each time a row's body is evaluated; the measured launch-time reduction is 337 ms (iPhone 17 simulator, marks from `sdk/swift`). The [Jetpack Compose sample](examples/compose-sample), on the Android Emulator with marks from `sdk/kotlin`:
+
+```
+cold start  ★ launch.ttfd  −80.5% [−81.4% … −79.3%]  faster  (8 pairs, decided at 8 pairs)
+    slow 442 ms · fast 85.0 ms
+    cpu.time               400 ms → 60.0 ms    −84.0% [−85.1% … −82.5%]       faster
+```
+
+Its scroll case did not decide (`frames.janky` 6 → 6 per 4 flings, underpowered): the slow rows' 4 ms did not turn into janky frames there. What both samples measure, and what a mark times: [docs/native.md](docs/native.md). What is planned (build from source, Macrobenchmark and XCTest metrics as backends, Perfetto and Instruments for attribution): [docs/native.md](docs/native.md).
 
 ## Running it
 
