@@ -90,6 +90,8 @@ async function quiet(o: BenchOptions): Promise<void> {
  * used more than half the cores, the experiment is refused: a rerun of one side would give it launches its
  * pair-mate never had. Processes that start and end between two samples are not seen.
  */
+const round2 = (x: number) => Math.round(x * 100) / 100;
+
 async function block(o: BenchOptions, name: string, c: Case, v: Variant, tag: string): Promise<Block> {
   await quiet(o);
   const watch = watchOthers(isDevice(o));
@@ -97,11 +99,15 @@ async function block(o: BenchOptions, name: string, c: Case, v: Variant, tag: st
     await watch.stop();
     throw error;
   });
-  const cores = await watch.stop();
-  if (cores > limit())
+  const others = await watch.stop();
+  await appendFile(
+    join(o.dir, 'blocks.ndjson'),
+    `${JSON.stringify({ case: name, block: tag, role: v.role, others_mean_cores: round2(others.mean), others_busiest_5s_cores: round2(others.busiest), cores: cpus().length })}\n`,
+  );
+  if (others.busiest > limit())
     throw new Refusal(
       'Background',
-      `${name} ${tag} ${v.role}: other processes used ${cores.toFixed(1)} of ${cpus().length} cores for 5 s during the block: something else is using the machine`,
+      `${name} ${tag} ${v.role}: other processes used ${others.busiest.toFixed(1)} of ${cpus().length} cores for 5 s during the block: something else is using the machine`,
     );
   return result;
 }
@@ -351,10 +357,10 @@ async function check(o: Omit<BenchOptions, 'base' | 'pairs' | 'warmup'>): Promis
       await watch.stop();
       throw error;
     });
-    const cores = await watch.stop();
-    if (cores > limit())
+    const { busiest } = await watch.stop();
+    if (busiest > limit())
       o.experiment.warnings.push(
-        `${name}: other processes used ${cores.toFixed(1)} of ${cpus().length} cores for 5 s during it: values from a busy machine`,
+        `${name}: other processes used ${busiest.toFixed(1)} of ${cpus().length} cores for 5 s during it: values from a busy machine`,
       );
     o.experiment.checks.push({ case: name, values: b.values, refused: b.refused });
     o.log(

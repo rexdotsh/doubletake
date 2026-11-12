@@ -57,7 +57,10 @@ export function coresBetween(a: CpuSnapshot, b: CpuSnapshot): number {
 }
 
 /** Watches other work once a second; `stop` gives the busiest 5-second stretch, in cores. */
-export function watchOthers(isDevice: (command: string) => boolean): { stop(): Promise<number> } {
+/** Other processes' CPU over a block, in cores: the mean, and the busiest 5-second stretch. */
+export type Others = { mean: number; busiest: number };
+
+export function watchOthers(isDevice: (command: string) => boolean): { stop(): Promise<Others> } {
   const state: { running: boolean; error?: unknown } = { running: true };
   const intervals: { ms: number; cores: number }[] = [];
   const loop = (async () => {
@@ -77,9 +80,15 @@ export function watchOthers(isDevice: (command: string) => boolean): { stop(): P
       state.running = false;
       await loop;
       if (state.error) throw state.error;
-      return busiest(intervals, 5000);
+      return summarize(intervals);
     },
   };
+}
+
+export function summarize(intervals: readonly { ms: number; cores: number }[]): Others {
+  const ms = intervals.reduce((sum, i) => sum + i.ms, 0);
+  const mean = intervals.reduce((sum, i) => sum + i.cores * i.ms, 0) / Math.max(1, ms);
+  return { mean, busiest: busiest(intervals, 5000) };
 }
 
 /** The highest average over any run of consecutive intervals spanning at least `span` ms (or all of them). */
