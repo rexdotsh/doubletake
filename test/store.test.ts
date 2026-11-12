@@ -23,6 +23,15 @@ test("a killed bench's device lock is taken over; a live one is not", async () =
     await writeFile(join(home, 'locks', 'race.pid'), '999999999');
     const both = await Promise.allSettled([lockDevice('race'), lockDevice('race')]);
     expect(both.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+
+    // A taker killed mid-way leaves its mutex: later benches refuse rather than guess it is dead.
+    await writeFile(join(home, 'locks', 'held.pid'), '999999999');
+    await mkdir(join(home, 'locks', 'held.pid.takeover'));
+    const stuck = await lockDevice('held').then(
+      () => '',
+      (error: unknown) => String(error),
+    );
+    expect(stuck).toMatch(/takeover is held/);
   } finally {
     if (before === undefined) delete process.env.DOUBLETAKE_HOME;
     else process.env.DOUBLETAKE_HOME = before;

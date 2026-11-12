@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { Platform } from './metrics.ts';
@@ -111,15 +111,14 @@ export async function loadExperiment(ref: string): Promise<{ dir: string; experi
 
 /**
  * Removes a dead holder's lock file, one taker at a time: two benches that both saw the dead pid must not both
- * delete, or the second would delete the first one's new lock. A taker killed mid-way leaves its mutex for 10 s.
+ * delete, or the second would delete the first one's new lock. The mutex never expires: a taker killed in
+ * these few milliseconds leaves it, and later benches refuse, naming it.
  */
 async function takeOver(file: string, dead: number): Promise<boolean> {
   const mutex = `${file}.takeover`;
   try {
     await mkdir(mutex);
   } catch {
-    const since = (await stat(mutex).catch(() => undefined))?.mtimeMs ?? Date.now();
-    if (Date.now() - since > 10_000) await rm(mutex, { recursive: true, force: true });
     return false;
   }
   try {
@@ -161,9 +160,11 @@ export async function lockDevice(device: string): Promise<() => Promise<void>> {
         if (!(await takeOver(file, holder))) await sleep(200);
         continue;
       }
-      throw new Error(`device ${device} is locked (in use by pid ${holder || '?'}): one bench per device at a time`, {
-        cause: error,
-      });
+      const why =
+        holder && !alive(holder)
+          ? `pid ${holder} is gone, but ${file}.takeover is held: remove it if no bench is starting`
+          : `in use by pid ${holder || '?'}`;
+      throw new Error(`device ${device} is locked (${why}): one bench per device at a time`, { cause: error });
     }
   }
   return async () => {
