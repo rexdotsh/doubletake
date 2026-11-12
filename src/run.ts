@@ -218,6 +218,7 @@ export async function runOnce(ctx: RunContext): Promise<RunResult> {
     since: Date.now() + ctx.offset,
     offset: ctx.offset,
     consumed: new Set(),
+    alerts: ctx.bench.alerts,
   };
   const launchCase = caseKind(ctx.case) === 'launch';
   const { recording, action } = launchCase

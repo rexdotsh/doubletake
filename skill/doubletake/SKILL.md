@@ -40,7 +40,7 @@ export default {
 ```
 
 - One of `launch`, `run` or `idle` per case. `setup` is untimed; `run` is timed.
-- Steps: `launch`, `terminate`, `{ open }`, `{ wait: 'mark:x' }`, `{ sleep }`, `{ tap }`, `{ swipe }`, `{ scroll }`, `{ maestro: 'flow.yaml' }`, `{ shell }`. iOS taps and swipes go through AXe, Android ones through adb (milliseconds; they do not wait for the screen to settle, so add a `wait` or `sleep`). Android taps by text need Maestro (seconds): keep them in `setup`.
+- Steps: `launch`, `terminate`, `{ open }`, `{ wait: 'mark:x' }`, `{ sleep }`, `{ tap }`, `{ swipe }`, `{ scroll }`, `{ maestro: 'flow.yaml' }`, `{ shell }`. iOS taps and swipes go through AXe, Android ones through adb (milliseconds; they do not wait for the screen to settle, so add a `wait` or `sleep`). A tap is `[x, y]` (fractions, 0–1), `{ points: [x, y] }`, a label string, `{ label }` or `{ id }` (test ID), with `index` for one of several matches (0 first). Android element taps need Maestro (seconds): keep them in `setup`. iOS system prompts: `open` accepts "Open in …?" itself; list other prompt buttons in the bench's `alerts`.
 - Unknown keys and metrics fail with the nearest name.
 
 ## Picking a primary

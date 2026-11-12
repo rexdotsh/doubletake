@@ -1,6 +1,6 @@
 import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
-import { type Device, type Recording, logTap } from './device.ts';
+import { type Device, type Point, type Recording, isPoint, logTap } from './device.ts';
 import { maestroCommands, maestroInline } from './maestro.ts';
 import { run, sleep, stop, stream } from './sh.ts';
 
@@ -47,9 +47,6 @@ export function parseMeminfo(out: string): { pss?: number; rss?: number } {
   };
   return { pss: kb(/TOTAL PSS:\s*(\d+)/), rss: kb(/TOTAL RSS:\s*(\d+)/) };
 }
-
-/** A coordinate: a fraction of the screen, or pixels. */
-const px = (v: number, size: number) => String(Math.round(v <= 1 ? v * size : v));
 
 /** "0:01.23" (toybox ps TIME+) to ms. */
 function timePlus(text: string): number {
@@ -207,16 +204,17 @@ function device(serial: string, adb: Adb, shell: (cmd: string) => Promise<string
       read: async (pkg) => parseGfxinfo(await shell(`dumpsys gfxinfo ${pkg}`)),
     },
     async input(pkg, actions) {
-      // A tap by text needs Maestro; then the whole batch goes through it, in Maestro's own coordinates.
-      if (actions.some((a) => 'tap' in a && typeof a.tap === 'string'))
-        return maestroInline(serial, pkg, maestroCommands(actions));
       const { w, h } = await screen();
+      const dp = Number(/(\d+)\s*$/.exec((await shell('wm density')).trim())?.[1] ?? 160) / 160;
+      const px = (at: Point): [number, number] =>
+        Array.isArray(at) ? [at[0] * w, at[1] * h] : [at.points[0] * dp, at.points[1] * dp];
+      // A tap on an element needs Maestro (adb has no selector); then the whole batch goes through it.
+      if (actions.some((a) => 'tap' in a && !isPoint(a.tap)))
+        return maestroInline(serial, pkg, maestroCommands(actions, px));
+      const xy = (at: Point) => px(at).map(Math.round).join(' ');
       for (const a of actions) {
-        if ('tap' in a && typeof a.tap !== 'string') await shell(`input tap ${px(a.tap[0], w)} ${px(a.tap[1], h)}`);
-        else if ('swipe' in a)
-          await shell(
-            `input swipe ${px(a.swipe.from[0], w)} ${px(a.swipe.from[1], h)} ${px(a.swipe.to[0], w)} ${px(a.swipe.to[1], h)} ${a.swipe.duration}`,
-          );
+        if ('swipe' in a) await shell(`input swipe ${xy(a.swipe.from)} ${xy(a.swipe.to)} ${a.swipe.duration}`);
+        else if (isPoint(a.tap)) await shell(`input tap ${xy(a.tap)}`);
       }
       return undefined;
     },
