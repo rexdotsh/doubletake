@@ -6,7 +6,7 @@ import { pct } from './bench.ts';
 import type { Device } from './device.ts';
 import { Refusal } from './device.ts';
 import { isCount, metricInfo } from './metrics.ts';
-import { coresBetween, snapshot } from './host.ts';
+import { coresBetween, snapshot, watchOthers } from './host.ts';
 import { type RunResult, filmed, runOnce } from './run.ts';
 import { type Comparison, LOOKS, MIN_PAIRS, POCOCK_LEVEL, compare, median } from './stats.ts';
 import { type Experiment, type Series, type Variant, lockDevice, saveExperiment } from './store.ts';
@@ -54,14 +54,16 @@ const QUIET_WAIT_MS = 30 * 60_000;
 
 const limit = () => cpus().length * BUSY_SHARE;
 
+const isDevice = (o: Pick<BenchOptions, 'device'>) => (command: string) => o.device.isHostProcess(command);
+
 /** Waits until other processes use under half the host's cores over 5 s; refuses after 30 minutes. */
 async function quiet(o: BenchOptions): Promise<void> {
   const deadline = Date.now() + QUIET_WAIT_MS;
   let said = false;
   for (;;) {
-    const before = await snapshot(o.device.hostMarkers);
+    const before = await snapshot(isDevice(o));
     await sleep(5000);
-    const cores = coresBetween(before, await snapshot(o.device.hostMarkers));
+    const cores = coresBetween(before, await snapshot(isDevice(o)));
     if (cores <= limit()) return;
     if (Date.now() > deadline)
       throw new Refusal(
@@ -76,18 +78,22 @@ async function quiet(o: BenchOptions): Promise<void> {
 }
 
 /**
- * A block on a quiet host. When other processes used more than half the cores during it, the experiment is
- * refused: a rerun of one side would give it launches its pair-mate never had.
+ * A block on a quiet host. Other work is sampled once a second through the block; when any 5-second stretch
+ * used more than half the cores, the experiment is refused: a rerun of one side would give it launches its
+ * pair-mate never had. Processes that start and end between two samples are not seen.
  */
 async function block(o: BenchOptions, name: string, c: Case, v: Variant, tag: string): Promise<Block> {
   await quiet(o);
-  const before = await snapshot(o.device.hostMarkers);
-  const result = await measureBlock(o, name, c, v, tag);
-  const cores = coresBetween(before, await snapshot(o.device.hostMarkers));
+  const watch = watchOthers(isDevice(o));
+  const result = await measureBlock(o, name, c, v, tag).catch(async (error: unknown) => {
+    await watch.stop();
+    throw error;
+  });
+  const cores = await watch.stop();
   if (cores > limit())
     throw new Refusal(
       'Background',
-      `${name} ${tag} ${v.role}: other processes used ${cores.toFixed(1)} of ${cpus().length} cores during the block: something else is using the machine`,
+      `${name} ${tag} ${v.role}: other processes used ${cores.toFixed(1)} of ${cpus().length} cores for 5 s during the block: something else is using the machine`,
     );
   return result;
 }
@@ -326,18 +332,21 @@ async function check(o: Omit<BenchOptions, 'base' | 'pairs' | 'warmup'>): Promis
   for (const name of o.cases) {
     const c = caseOf(o.bench, name);
     // A check decides nothing, so a busy host is a warning on its values, never a wait or a refusal.
-    const before = await snapshot(o.device.hostMarkers);
+    const watch = watchOthers(isDevice(o));
     const b = await measureBlock(
       { ...o, base: o.head, pairs: 1, warmup: 0, runs: 1 },
       name,
       { ...c, runs: 1 },
       o.head,
       'check',
-    );
-    const cores = coresBetween(before, await snapshot(o.device.hostMarkers));
+    ).catch(async (error: unknown) => {
+      await watch.stop();
+      throw error;
+    });
+    const cores = await watch.stop();
     if (cores > limit())
       o.experiment.warnings.push(
-        `${name}: other processes used ${cores.toFixed(1)} of ${cpus().length} cores during it: values from a busy machine`,
+        `${name}: other processes used ${cores.toFixed(1)} of ${cpus().length} cores for 5 s during it: values from a busy machine`,
       );
     o.experiment.checks.push({ case: name, values: b.values, refused: b.refused });
     o.log(

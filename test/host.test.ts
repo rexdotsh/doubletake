@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { coresBetween, others, parsePs } from '../src/host.ts';
+import { busiest, coresBetween, others, parsePs } from '../src/host.ts';
 
 const ps = `  1     0   1:00.00 /sbin/launchd
  100     1   0:10.00 node doubletake.mjs bench
@@ -9,17 +9,35 @@ const ps = `  1     0   1:00.00 /sbin/launchd
  300     1   2:00.00 xcodebuild -scheme Other`;
 
 test('doubletake and the device are not other work; their children neither', () => {
-  expect(others(parsePs(ps), 100, ['ABCD']).map((p) => p.pid)).toEqual([1, 300]);
+  expect(others(parsePs(ps), 100, (command) => command.includes('ABCD/launchd_sim')).map((p) => p.pid)).toEqual([
+    1, 300,
+  ]);
 });
 
 test('cores used between two snapshots count new processes whole', () => {
-  const a = { at: 0, byPid: new Map([[300, 120_000]]) };
+  const a = { at: 0, byProc: new Map([['300 xcodebuild', 120_000]]) };
   const b = {
     at: 10_000,
-    byPid: new Map([
-      [300, 140_000],
-      [301, 5_000],
+    byProc: new Map([
+      ['300 xcodebuild', 140_000],
+      ['301 clang', 5_000],
     ]),
   };
   expect(coresBetween(a, b)).toBe(2.5);
+});
+
+test('a short burst shows in the busiest 5 s, not diluted over the block', () => {
+  const quietSecond = { ms: 1000, cores: 0.5 };
+  const intervals = [
+    ...Array.from({ length: 10 }, () => quietSecond),
+    ...Array.from({ length: 5 }, () => ({ ms: 1000, cores: 8 })),
+    ...Array.from({ length: 10 }, () => quietSecond),
+  ];
+  expect(busiest(intervals, 5000)).toBe(8);
+});
+
+test('a reused pid with another command is a new process', () => {
+  const a = { at: 0, byProc: new Map([['400 old', 60_000]]) };
+  const b = { at: 1000, byProc: new Map([['400 new', 800]]) };
+  expect(coresBetween(a, b)).toBe(0.8);
 });

@@ -39,8 +39,8 @@ export interface Device {
   readonly id: string;
   readonly name: string;
   readonly os: string;
-  /** Strings in the command lines of the host processes that run the device (a simulator's udid). */
-  readonly hostMarkers: readonly string[];
+  /** Whether a host process (its `ps` command line) is the root of this device: its launchd_sim or qemu. */
+  isHostProcess(command: string): boolean;
   /** Status bar, animations: whatever makes runs and videos comparable. */
   prepare(): Promise<void>;
   appId(artifact: string): Promise<string>;

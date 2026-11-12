@@ -124,7 +124,8 @@ function simulator(udid: string, name: string, os: string, axe: string | undefin
   return {
     platform: 'ios',
     id: udid,
-    hostMarkers: [udid],
+    // The simulator's launchd_sim, whose argument is a file under its own device folder; apps run below it.
+    isHostProcess: (command) => command.startsWith('launchd_sim ') && command.includes(`/Devices/${udid}/`),
     name,
     os,
     async prepare() {
