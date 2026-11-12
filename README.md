@@ -18,6 +18,15 @@ That is the [sample app](examples/expo-sample) in this repo on an iPhone 17 simu
 
 It is inspired by [strobe](https://github.com/anomalyco/strobe), which does this for web pages, Electron and desktop apps, and borrows its rules: one primary metric declared up front, paired blocks in alternating order, planned looks, refusals instead of made-up numbers, and an experiment record shaped like strobe's `result.json`.
 
+## On a production app
+
+doubletake was tried on a production React Native app (Expo, Hermes, a ~24 MB JS bundle, crypto wallet and payments SDKs, a heavy home feed), comparing main with a stack of startup changes:
+
+- `doubletake bundle` gave the exact change: −0.4 MB (−1.6%), almost all of it one web3 library that had been bundled in two module formats, and listed the libraries still bundled at two or three versions (another ~1.6 MB).
+- The first timed bench ran beside another Xcode build on the same Mac (load 94 on 10 cores): its pairs swung by ±12% and could not have been trusted. doubletake now samples the other processes' CPU once a second and refuses an experiment when they hold more than half the cores for 5 s during a block, which is what it did on every later attempt while that machine stayed shared.
+
+The lesson is the one strobe states first: a number you cannot defend is not a result. A refused bench on a busy machine is an answer.
+
 ## Install
 
 ```sh
@@ -122,7 +131,9 @@ Swift and Kotlin apps get the same runs and verdicts: copy [`sdk/swift/Doubletak
 
 ## What it can't do
 
-- **A busy host.** Before each block the host's 1-minute load must be under half its cores (doubletake waits up to 30 minutes); a block during which load rose refuses the experiment (a rerun of one side would give it launches its pair-mate never had). A 1-minute average is coarse: run one bench per machine and nothing heavy beside it.
+- **Android is new.** The emulator target is implemented and its parsers are tested, but it has not yet run a full bench end to end; the numbers above are from the iOS Simulator.
+
+- **A busy host.** doubletake reads every other process's CPU time once a second (its own processes and the device's simulator or emulator excluded). Before a block it waits up to 30 minutes for them to use under half the cores; when they hold more than half the cores for 5 s during a block, the experiment is refused (a rerun of one side would give it launches its pair-mate never had). Processes that start and end within one second are not seen: run one bench per machine and nothing heavy beside it.
 
 - **Simulators and emulators are not phones.** They run on the Mac's CPU and GPU, without thermal limits or a phone's storage. Use them to compare two builds on the same machine, never to quote absolute launch times.
 - **iOS UI frames.** Hitches and frame times need Instruments; doubletake does not read them yet, and refuses `frames.*` on iOS. JS frames come from the SDK.
