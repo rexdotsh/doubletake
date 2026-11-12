@@ -119,7 +119,7 @@ Exit codes: 0 done, 1 error, 4 a primary was refused, 5 not every primary decide
 - `--video <case>` films one more run per side after the pairs (never a timed one) and puts them side by side with a shared timer.
 - `report --format md` is the PR card; `--comment <pr>` posts it with `gh pr comment`, attaching the video.
 
-Experiments live in `~/.doubletake/experiments/<id>/`: `result.json` (strobe-shaped: `id`, `kind`, `variants`, `series[].primary` with `verdict_kind`, `lo`, `hi`, `needed_pairs`), `runs.ndjson` (every run, warm-ups included), `blocks.ndjson` (other processes' CPU during each block: mean and busiest 5 s, in cores) and videos.
+Experiments live in `~/.doubletake/experiments/<id>/`: `result.json` (strobe-shaped: `id`, `kind`, `variants`, `series[].primary` with `verdict_kind`, `lo`, `hi`, `needed_pairs`), `runs.ndjson` (every run, warm-ups included), `blocks.ndjson` (other processes' CPU during each measured block, failed ones included: mean and busiest 5 s, in cores) and videos.
 
 ## Where it fits
 
