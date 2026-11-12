@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { busiest, coresBetween, others, parsePs, watchOthers } from '../src/host.ts';
+import { busiest, coresBetween, others, parsePs, summarize, watchOthers } from '../src/host.ts';
 
 const ps = `  1     0   1:00.00 /sbin/launchd
  100     1   0:10.00 node doubletake.mjs bench
@@ -51,4 +51,12 @@ test('a failing sample is held until stop, not thrown into the void', async () =
     (e: unknown) => String(e),
   );
   expect(error).toContain('ps failed');
+});
+
+test('a block records the mean beside the busiest 5 s', () => {
+  const intervals = [
+    ...Array.from({ length: 10 }, () => ({ ms: 1000, cores: 1 })),
+    ...Array.from({ length: 5 }, () => ({ ms: 1000, cores: 4 })),
+  ];
+  expect(summarize(intervals)).toEqual({ mean: 2, busiest: 4 });
 });

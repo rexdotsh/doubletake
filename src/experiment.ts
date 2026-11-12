@@ -6,7 +6,7 @@ import { pct } from './bench.ts';
 import type { Device } from './device.ts';
 import { Refusal } from './device.ts';
 import { isCount, metricInfo } from './metrics.ts';
-import { coresBetween, snapshot, watchOthers } from './host.ts';
+import { coresBetween, type Others, snapshot, watchOthers } from './host.ts';
 import { type RunResult, filmed, runOnce } from './run.ts';
 import { type Comparison, LOOKS, MIN_PAIRS, POCOCK_LEVEL, compare, median } from './stats.ts';
 import { type Experiment, type Series, type Variant, lockDevice, saveExperiment } from './store.ts';
@@ -85,6 +85,31 @@ async function quiet(o: BenchOptions): Promise<void> {
   }
 }
 
+const round2 = (x: number) => Math.round(x * 100) / 100;
+
+/**
+ * Runs `measure` while sampling other processes' CPU, and appends what they used to `blocks.ndjson`, also when
+ * the block fails.
+ */
+async function watched<T>(o: Pick<BenchOptions, 'device' | 'dir'>, at: object, measure: () => Promise<T>) {
+  const watch = watchOthers(isDevice(o));
+  const save = (others: Others, failed: boolean) =>
+    appendFile(
+      join(o.dir, 'blocks.ndjson'),
+      `${JSON.stringify({ ...at, ...(failed && { failed }), others_mean_cores: round2(others.mean), others_busiest_5s_cores: round2(others.busiest), cores: cpus().length })}\n`,
+    );
+  const result = await measure().catch(async (error: unknown) => {
+    await watch
+      .stop()
+      .then((others) => save(others, true))
+      .catch(() => undefined);
+    throw error;
+  });
+  const others = await watch.stop();
+  await save(others, false);
+  return { result, others };
+}
+
 /**
  * A block on a quiet host. Other work is sampled once a second through the block; when any 5-second stretch
  * used more than half the cores, the experiment is refused: a rerun of one side would give it launches its
@@ -92,16 +117,13 @@ async function quiet(o: BenchOptions): Promise<void> {
  */
 async function block(o: BenchOptions, name: string, c: Case, v: Variant, tag: string): Promise<Block> {
   await quiet(o);
-  const watch = watchOthers(isDevice(o));
-  const result = await measureBlock(o, name, c, v, tag).catch(async (error: unknown) => {
-    await watch.stop();
-    throw error;
-  });
-  const cores = await watch.stop();
-  if (cores > limit())
+  const { result, others } = await watched(o, { case: name, block: tag, role: v.role }, () =>
+    measureBlock(o, name, c, v, tag),
+  );
+  if (others.busiest > limit())
     throw new Refusal(
       'Background',
-      `${name} ${tag} ${v.role}: other processes used ${cores.toFixed(1)} of ${cpus().length} cores for 5 s during the block: something else is using the machine`,
+      `${name} ${tag} ${v.role}: other processes used ${others.busiest.toFixed(1)} of ${cpus().length} cores for 5 s during the block: something else is using the machine`,
     );
   return result;
 }
@@ -340,21 +362,15 @@ async function check(o: Omit<BenchOptions, 'base' | 'pairs' | 'warmup'>): Promis
   for (const name of o.cases) {
     const c = caseOf(o.bench, name);
     // A check decides nothing, so a busy host is a warning on its values, never a wait or a refusal.
-    const watch = watchOthers(isDevice(o));
-    const b = await measureBlock(
-      { ...o, base: o.head, pairs: 1, warmup: 0, runs: 1 },
-      name,
-      { ...c, runs: 1 },
-      o.head,
-      'check',
-    ).catch(async (error: unknown) => {
-      await watch.stop();
-      throw error;
-    });
-    const cores = await watch.stop();
-    if (cores > limit())
+    const {
+      result: b,
+      others: { busiest },
+    } = await watched(o, { case: name, block: 'check', role: o.head.role }, () =>
+      measureBlock({ ...o, base: o.head, pairs: 1, warmup: 0, runs: 1 }, name, { ...c, runs: 1 }, o.head, 'check'),
+    );
+    if (busiest > limit())
       o.experiment.warnings.push(
-        `${name}: other processes used ${cores.toFixed(1)} of ${cpus().length} cores for 5 s during it: values from a busy machine`,
+        `${name}: other processes used ${busiest.toFixed(1)} of ${cpus().length} cores for 5 s during it: values from a busy machine`,
       );
     o.experiment.checks.push({ case: name, values: b.values, refused: b.refused });
     o.log(
