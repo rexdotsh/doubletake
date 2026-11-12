@@ -25,7 +25,7 @@ android {
       signingConfig = signingConfigs.getByName("debug")
     }
   }
-  sourceSets["main"].java.srcDir("../../../sdk/kotlin")
+  sourceSets["main"].kotlin.directories.add("../../../sdk/kotlin")
 }
 
 dependencies {
