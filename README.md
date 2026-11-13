@@ -91,17 +91,17 @@ The SDK has no dependencies and no timers: each event is one log line written wh
 
 ## Metrics
 
-| Metric                          | Where     | From                                                                                                  |
-| ------------------------------- | --------- | ----------------------------------------------------------------------------------------------------- |
-| `launch.ttid`                   | Android   | `am start -W` TotalTime: the intent to the first frame                                                |
-| `launch.ttfd`, `mark.<name>`    | both, SDK | the process start (iOS) or the launch intent (Android) to the mark                                    |
-| `launch.visual`                 | both      | a screen recording: the launch to the frame after which the screen stays within 1% of its final image |
-| `cpu.time`, `cpu.idle`          | both      | the app process's CPU time over the run, or per second idle                                           |
-| `memory.peak`, `memory.end`     | both      | iOS `footprint` (phys_footprint and its peak); Android VmHWM and PSS                                  |
-| `frames.janky`, `frames.p90`    | Android   | `dumpsys gfxinfo`, reset before the run                                                               |
-| `js.stall`, `js.frames.dropped` | both, SDK | requestAnimationFrame frames that came late: a busy JS thread                                         |
-| `net.requests`, `net.bytes`     | both, SDK | finished XMLHttpRequest/fetch requests and response bytes                                             |
-| `react.commits`, `react.render` | both, SDK | React Profiler `onRender` (profiling builds only)                                                     |
+| Metric                          | Where     | From                                                                                                                                                                                 |
+| ------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `launch.ttid`                   | Android   | `am start -W` TotalTime: the intent to the first frame                                                                                                                               |
+| `launch.ttfd`, `mark.<name>`    | both, SDK | the process start (iOS) or the launch intent (Android) to the mark                                                                                                                   |
+| `launch.visual`                 | both      | a screen recording: the launch (iOS) or its first visible change (Android, whose recorder has no start clock) to the frame after which the screen stays within 1% of its final image |
+| `cpu.time`, `cpu.idle`          | both      | the app process's CPU time over the run, or per second idle                                                                                                                          |
+| `memory.peak`, `memory.end`     | both      | iOS `footprint` (phys_footprint and its peak); Android VmHWM and PSS                                                                                                                 |
+| `frames.janky`, `frames.p90`    | Android   | `dumpsys gfxinfo`, reset before the run                                                                                                                                              |
+| `js.stall`, `js.frames.dropped` | both, SDK | requestAnimationFrame frames that came late: a busy JS thread                                                                                                                        |
+| `net.requests`, `net.bytes`     | both, SDK | finished XMLHttpRequest/fetch requests and response bytes                                                                                                                            |
+| `react.commits`, `react.render` | both, SDK | React Profiler `onRender` (profiling builds only)                                                                                                                                    |
 
 ## How a verdict is made
 

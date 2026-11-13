@@ -5,7 +5,7 @@ import { Refusal } from './device.ts';
 import { countersIn, marksIn, ofProcess } from './events.ts';
 import { type FlowState, launch, runSteps } from './flow.ts';
 import { sleep } from './sh.ts';
-import { VIDEO_FPS, decodeFrames, visualTimes } from './visual.ts';
+import { type Region, VIDEO_FPS, decodeFrames, visualTimes } from './visual.ts';
 
 type RunValues = Record<string, number>;
 /** A run's recording, if filmed, and when its action began (host clock). */
@@ -98,15 +98,12 @@ async function analyseVideo(
   const frames = await decodeFrames(file);
   const seconds = frames.length / VIDEO_FPS;
   if (recording.startedAt === undefined) {
-    // No clock for the video's first frame: no launch.visual, and the clip starts at its first change.
-    if (launchCase)
-      refused['launch.visual'] = 'NoVideoClock: this recorder gives no start time to align the launch with';
-    try {
-      return { file, first: visualTimes(frames, bench.ignore, 0).first / 1000, seconds };
-    } catch (error) {
-      if (error instanceof Refusal) return { file, first: 0, seconds };
-      throw error;
-    }
+    // No clock for the video's first frame (Android's screenrecord). The recording starts on a still screen a
+    // second before the launch, so its first change is the launch's first visible response: time from there.
+    const { first, visual, refusal } = clockless(frames, bench.ignore, launchCase);
+    if (launchCase && visual !== undefined) values['launch.visual'] = visual;
+    if (launchCase && refusal) refused['launch.visual'] = refusal;
+    return { file, first, seconds };
   }
   const at = Math.max(0, action - recording.startedAt);
   try {
@@ -117,6 +114,25 @@ async function analyseVideo(
     if (launchCase) refused['launch.visual'] = `${error.validator}: ${error.message}`;
   }
   return { file, first: at / 1000, seconds };
+}
+
+/**
+ * `launch.visual` from a clip without a start clock: from its first change (the launch's first visible response;
+ * the clip starts on a still screen a second before the launch) to the frame after which the screen settles.
+ * `first` is where the clip's action starts, in seconds.
+ */
+export function clockless(
+  frames: readonly Uint8Array[],
+  ignore: readonly Region[] = [],
+  launchCase = true,
+): { first: number; visual?: number; refusal?: string } {
+  try {
+    const visual = visualTimes(frames, ignore, launchCase ? 1000 : 0);
+    return { first: visual.first / 1000, visual: launchCase ? visual.complete - visual.first : undefined };
+  } catch (error) {
+    if (!(error instanceof Refusal)) throw error;
+    return { first: 0, refusal: `${error.validator}: ${error.message}` };
+  }
 }
 
 /** A cold launch: untimed setup, then the app is terminated and launched; times are from the process's start. */

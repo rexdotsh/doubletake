@@ -32,7 +32,7 @@ export const METRICS: Record<string, MetricInfo> = {
     unit: 'ms',
     better: 'lower',
     source:
-      'screen recording: the first changed frame to the frame after which the screen stays within 1% of its final image',
+      "screen recording: the launch command (iOS) or the launch's first visible change (Android, whose recorder has no clock) to the frame after which the screen stays within 1% of its final image",
     platforms: both,
   },
   'run.duration': {
