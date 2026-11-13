@@ -43,15 +43,16 @@ export function pickTarget(list: unknown, appId: string, device: string): { url:
     return {
       refusal: `${appId} runs on ${[...new Set(named.map((t) => String(t.deviceName)))].join(', ')}, not ${device}`,
     };
-  const devices = new Set(here.map(deviceOf));
+  // One device can list a legacy page beside the current one; only the current ones (with `reactNative`) count
+  // when there are any, so a logical id and a display name of one device are never two devices.
+  const modern = here.filter((t) => isRecord(t.reactNative));
+  const pages = modern.length ? modern : here;
+  const devices = new Set(pages.map(deviceOf));
   if (devices.size > 1)
     return {
       refusal: `${devices.size} devices run ${appId} as ${device}: stop the others or use one Metro per device`,
     };
-  // One device can list a legacy page beside the current one: the current one carries `reactNative`.
-  const modern = here.filter((t) => isRecord(t.reactNative));
-  const target = (modern.length ? modern : here).at(-1);
-  return { url: String(target?.webSocketDebuggerUrl) };
+  return { url: String(pages.at(-1)?.webSocketDebuggerUrl) };
 }
 
 async function find(metro: string, appId: string, device: string, d: Deadlines): Promise<string> {

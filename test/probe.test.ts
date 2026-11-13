@@ -405,6 +405,10 @@ test('the CDP target is exactly the app, on exactly this device, and only one', 
   expect(pickTarget([page('com.app', 'iPhone 17', 'ws://new'), legacy], 'com.app', 'iPhone 17')).toEqual({
     url: 'ws://new',
   });
+  // Its current page names the device by a logical id, the legacy page by its name: still one device.
+  expect(pickTarget([page('com.app', 'iPhone 17', 'ws://cur', 'f00d'), legacy], 'com.app', 'iPhone 17')).toEqual({
+    url: 'ws://cur',
+  });
   expect(pickTarget({}, 'x', 'y')).toEqual({ refusal: "Metro's /json/list is not a list" });
   // A runtime Metro names no device for cannot be checked: refused, even when it is the only one.
   expect(pickTarget([{ appId: 'com.app', webSocketDebuggerUrl: 'ws://u' }], 'com.app', emulator)).toEqual({
@@ -540,7 +544,9 @@ test('reports show re-renders, duplicates and the waterfall per case', () => {
   expect(waterfall(base.waterfall, 2000)).toEqual([
     `▕${'█'.repeat(9).padEnd(32)}▏     +0   500 ms  200   1.0 KiB  GET /feed`,
     `▕${' '.repeat(16)}${'█'.repeat(16)}▏  +1000  1000 ms  200   1.0 KiB  GET /feed`,
-    `▕${' '.repeat(24)}${'…'.repeat(8)}▏  +1500     open    —   1.0 KiB  GET /me?#k1`,
+    `▕${' '.repeat(24)}${'…'.repeat(8)}▏  +1500     open    —         —  GET /me?#k1`,
   ]);
   expect(typical([head, base, { ...base, renders: 200 }])).toBe(base);
+  // Refused bytes: every size is unknown, not 0 B.
+  expect(waterfall(base.waterfall.slice(0, 1), 2000, false)[0]).toContain('  200         —  GET /feed');
 });
