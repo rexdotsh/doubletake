@@ -1,6 +1,7 @@
 import pkg from '../package.json' with { type: 'json' };
 import { metricInfo, words } from './metrics.ts';
 import { probeCard, probeText } from './probe-report.ts';
+import { profileCard, profileText } from './profile/report.ts';
 import type { Comparison } from './stats.ts';
 import type { Experiment, Series } from './store.ts';
 
@@ -97,6 +98,7 @@ export function summary(e: Experiment): string {
     for (const [m, why] of Object.entries(c.refused)) lines.push(`    ${m.padEnd(18)} refused: ${why}`);
   }
   lines.push(...probeText(e));
+  if (e.profiles?.length || e.profile_refusals?.length) lines.push('', ...profileText(e));
   return lines.join('\n');
 }
 
@@ -156,6 +158,7 @@ export function card(e: Experiment): string {
         .filter((c) => c.verdict_kind !== 'untested' || isHeadline(c.metric))
         .map((c) => row(s, c, false)),
     ]),
+    ...profileCard(e),
     '',
     ...probeCard(e),
     '<details><summary>Method</summary>',

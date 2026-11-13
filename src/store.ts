@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { Platform } from './metrics.ts';
 import type { ProbeDetail } from './probe.ts';
+import type { ProfileRefusal, ProfileResult } from './profile/result.ts';
 import type { Comparison } from './stats.ts';
 import { sleep } from './sh.ts';
 import { isRecord } from './util.ts';
@@ -60,6 +61,9 @@ export type Experiment = {
   checks: Check[];
   warnings: string[];
   video?: string;
+  /** `--profile`: per case and kind, profiles recorded in untimed blocks after the pairs (raw files in profiles/). */
+  profiles?: ProfileResult[];
+  profile_refusals?: ProfileRefusal[];
 };
 
 export function home(): string {

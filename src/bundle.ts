@@ -7,7 +7,28 @@ import { dig } from './util.ts';
 type Module = { id: number; bytes: number; source: string; pkg: string; version: string };
 export type BundleStats = { bytes: number; modules: Module[] };
 
-const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+const B64 = new Int8Array(128).fill(-1);
+const DIGITS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+for (let i = 0; i < DIGITS.length; i++) B64[DIGITS.charCodeAt(i)] = i;
+
+/** One source map segment's fields (base64 VLQ, signed). */
+export function vlq(segment: string): number[] {
+  const fields: number[] = [];
+  let value = 0;
+  let shift = 0;
+  for (let i = 0; i < segment.length; i++) {
+    const digit = B64[segment.charCodeAt(i)] ?? -1;
+    if (digit < 0) throw new Error(`not base64 VLQ: ${segment}`);
+    value += (digit & 31) * 2 ** shift;
+    if (digit & 32) shift += 5;
+    else {
+      fields.push(value % 2 ? -Math.floor(value / 2) : Math.floor(value / 2));
+      value = 0;
+      shift = 0;
+    }
+  }
+  return fields;
+}
 
 /** The source index of the first segment of each generated line (VLQ fields are deltas across the map). */
 export function firstSources(mappings: string): (number | undefined)[] {
@@ -17,19 +38,7 @@ export function firstSources(mappings: string): (number | undefined)[] {
     let first: number | undefined;
     for (const segment of line.split(',')) {
       if (!segment) continue;
-      const fields: number[] = [];
-      let value = 0;
-      let shift = 0;
-      for (const ch of segment) {
-        const digit = B64.indexOf(ch);
-        value += (digit & 31) << shift;
-        if (digit & 32) shift += 5;
-        else {
-          fields.push(value & 1 ? -(value >> 1) : value >> 1);
-          value = 0;
-          shift = 0;
-        }
-      }
+      const fields = vlq(segment);
       if (fields.length >= 4) {
         source += fields[1] ?? 0;
         first ??= source;
