@@ -2,8 +2,8 @@ import { expect, test } from 'bun:test';
 import { validate } from '../src/bench.ts';
 import { parseSdkLine } from '../src/events.ts';
 import { metricInfo } from '../src/metrics.ts';
-import { androidMark, iosMark, osLogTime, phasesOf, waterfall } from '../src/timeline.ts';
-import { timelineSvg, timelineText, timelines } from '../src/timeline-report.ts';
+import { androidMark, iosMark, osLogTime, phaseRefusal, phasesOf, waterfall } from '../src/timeline.ts';
+import { parseLaunches, timelineSvg, timelineText, timelines } from '../src/timeline-report.ts';
 import type { Experiment } from '../src/store.ts';
 
 const pkg = 'dev.example.app';
@@ -92,9 +92,62 @@ test('the median waterfall reports a mark some launches missed, and never invent
   ]);
   expect(w.phases).toEqual([
     { from: 'start', to: 'a', start: 0, ms: 20, n: 3 },
-    { from: 'a', to: 'b', start: 20, ms: 95, n: 2 },
+    { from: 'a', to: 'b', start: 15, ms: 95, n: 2 },
+    { from: 'a', to: 'c', start: 30, ms: 320, n: 1 },
     { from: 'b', to: 'c', start: 110, ms: 180, n: 2 },
   ]);
+  expect(w.orders).toEqual([
+    { marks: ['a', 'b', 'c'], n: 2 },
+    { marks: ['a', 'c'], n: 1 },
+  ]);
+});
+
+test('a phase counts only the launches that had it, in its direction', () => {
+  const w = waterfall([
+    { a: 0, b: 100 },
+    { a: 20, b: 0 },
+    { a: 100, b: 30 },
+  ]);
+  expect(w.phases).toEqual([
+    { from: 'start', to: 'b', start: 0, ms: 15, n: 2 },
+    { from: 'start', to: 'a', start: 0, ms: 0, n: 1 },
+    { from: 'a', to: 'b', start: 0, ms: 100, n: 1 },
+    { from: 'b', to: 'a', start: 15, ms: 45, n: 2 },
+  ]);
+  expect(w.orders).toEqual([
+    { marks: ['b', 'a'], n: 2 },
+    { marks: ['a', 'b'], n: 1 },
+  ]);
+});
+
+test('a declared phase a run did not have is refused with why', () => {
+  const marks = new Map([
+    ['a', 100],
+    ['c', 200],
+    ['b', 300],
+    ['early', -5],
+  ]);
+  expect(phaseRefusal('phase.a->b', marks)).toBe('NotAPhase: c came between a and b in this run');
+  expect(phaseRefusal('phase.b->a', marks)).toBe('NotAPhase: a came before b in this run');
+  expect(phaseRefusal('phase.a->home', marks)).toBe('NoMarker: the run wrote no home mark');
+  expect(phaseRefusal('phase.x->y', marks)).toBe('NoMarker: the run wrote no x or y mark');
+  expect(phaseRefusal('phase.early->a', marks)).toBe('NoMarker: the run wrote no early mark');
+  expect(phaseRefusal('phase.start->c', marks)).toBe('NotAPhase: a came between start and c in this run');
+});
+
+test('launches are the runs of launch cases, markless ones included', () => {
+  const runs = [
+    { case: 'cold', kind: 'launch', block: 'warm', role: 'base', warmup: false, values: { 'mark.a': 1 } },
+    { case: 'cold', kind: 'launch', block: 'p0', role: 'base', warmup: true, values: { 'mark.a': 2 } },
+    { case: 'cold', kind: 'launch', block: 'p0', role: 'base', warmup: false, values: { 'mark.a': 3 } },
+    { case: 'cold', kind: 'launch', block: 'p0', role: 'base', warmup: false, values: { 'cpu.time': 9 } },
+    { case: 'scroll', kind: 'run', block: 'p0', role: 'base', warmup: false, values: { 'mark.a': 4 } },
+    { case: 'old', block: 'p0', role: 'base', warmup: false, values: { 'mark.a': 5 } },
+  ];
+  const launches = parseLaunches(runs.map((r) => JSON.stringify(r)).join('\n'));
+  expect([...launches.keys()]).toEqual(['cold']);
+  expect(launches.get('cold')?.get('base')).toEqual([{ a: 3 }, {}]);
+  expect(waterfall(launches.get('cold')?.get('base') ?? []).marks).toEqual([{ name: 'a', at: 3, n: 1 }]);
 });
 
 test('timeline cases and phase metrics validate', () => {
@@ -109,6 +162,10 @@ test('timeline cases and phase metrics validate', () => {
   expect(metricInfo('phase.nope')).toBeUndefined();
   expect(() => validate({ cases: { c: { launch: { timeline: 'yes' }, primary: 'cpu.time' } } })).toThrow(
     'true or false',
+  );
+  expect(() => validate({ cases: { c: { launch: {}, primary: 'phase.a->b' } } })).toThrow('launch.timeline: true');
+  expect(() => validate({ cases: { c: { idle: '5s', primary: 'cpu.idle', metrics: ['phase.a->b'] } } })).toThrow(
+    'launch.timeline: true',
   );
 });
 

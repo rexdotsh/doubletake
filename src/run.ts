@@ -5,7 +5,7 @@ import { Refusal } from './device.ts';
 import { countersIn, marksIn, ofProcess } from './events.ts';
 import { type FlowState, launch, runSteps } from './flow.ts';
 import { PROBE_METRICS, type ProbeDetail, type ProbeSession, probeValues } from './probe.ts';
-import { phaseMetric, phasesOf } from './timeline.ts';
+import { phaseMetric, phaseRefusal, phasesOf } from './timeline.ts';
 import { sleep } from './sh.ts';
 import { type Region, type Transition, VIDEO_FPS, decodeFrames, transition, visualTimes } from './visual.ts';
 
@@ -80,12 +80,13 @@ function addSdk(values: RunValues, refused: Record<string, string>, ctx: RunCont
     window.to,
   );
   for (const [name, at] of marks) values[`mark.${name}`] = at - window.from;
-  if (timeline)
-    for (const p of phasesOf(new Map([...marks].map(([name, at]) => [name, at - window.from]))))
-      values[phaseMetric(p.from, p.to)] = p.ms;
-  for (const m of [ctx.case.primary, ...(ctx.case.metrics ?? [])])
-    if (m.startsWith('mark.') && values[m] === undefined)
-      refused[m] = `NoMarker: the run wrote no ${m.slice('mark.'.length)} mark`;
+  const relative = new Map([...marks].map(([name, at]) => [name, at - window.from]));
+  if (timeline) for (const p of phasesOf(relative)) values[phaseMetric(p.from, p.to)] = p.ms;
+  for (const m of [ctx.case.primary, ...(ctx.case.metrics ?? [])]) {
+    if (values[m] !== undefined) continue;
+    if (m.startsWith('mark.')) refused[m] = `NoMarker: the run wrote no ${m.slice('mark.'.length)} mark`;
+    else if (m.startsWith('phase.')) refused[m] = phaseRefusal(m, relative);
+  }
   const got = countersIn(events, window.from, window.to, window.launched);
   if (!got) {
     refuse(

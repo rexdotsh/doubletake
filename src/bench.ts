@@ -261,6 +261,9 @@ function parseCase(value: unknown, where: string): Case {
       timeout: optional(l.timeout, (v) => duration(v, `${where}.launch.timeout`)),
     };
   }
+  const declared = [c.primary, ...(Array.isArray(c.metrics) ? c.metrics : [])];
+  if (declared.some((m) => typeof m === 'string' && m.startsWith('phase.')) && launch?.timeline !== true)
+    throw new Error(`${where}: phase.* metrics need a launch case with launch.timeline: true`);
   return {
     primary: metric(c.primary, `${where}.primary`),
     metrics: optional(c.metrics, (v) => list(v, `${where}.metrics`).map((m) => metric(m, `${where}.metrics`))),

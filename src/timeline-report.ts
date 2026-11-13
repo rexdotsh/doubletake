@@ -22,24 +22,30 @@ export type CaseTimeline = {
   refused: Record<string, string>;
 };
 
-/** The measured launches of each case and side, from runs.ndjson: warm-up runs and blocks left out. */
-export async function readLaunches(dir: string): Promise<Map<string, Map<'base' | 'head', Launch[]>>> {
-  const text = await readFile(join(dir, 'runs.ndjson'), 'utf8').catch(() => '');
+/**
+ * The measured launches of each launch case and side, from runs.ndjson: warm-up runs and blocks left out, and
+ * a launch that wrote no mark kept (it counts in every mark's denominator). Runs of run and idle cases are not
+ * launches, whatever marks they wrote.
+ */
+export function parseLaunches(text: string): Map<string, Map<'base' | 'head', Launch[]>> {
   const cases = new Map<string, Map<'base' | 'head', Launch[]>>();
   for (const line of text.split('\n')) {
     if (!line.trim()) continue;
     const run: unknown = JSON.parse(line);
-    if (!isRecord(run) || run.warmup === true || run.block === 'warm' || !isRecord(run.values)) continue;
+    if (!isRecord(run) || run.kind !== 'launch' || run.warmup === true || run.block === 'warm') continue;
     if (typeof run.case !== 'string' || (run.role !== 'base' && run.role !== 'head')) continue;
     const marks: Launch = {};
-    for (const [metric, v] of Object.entries(run.values))
+    for (const [metric, v] of Object.entries(isRecord(run.values) ? run.values : {}))
       if (metric.startsWith('mark.') && typeof v === 'number') marks[metric.slice('mark.'.length)] = v;
-    if (!Object.keys(marks).length) continue;
     const sides = cases.get(run.case) ?? new Map<'base' | 'head', Launch[]>();
     sides.set(run.role, [...(sides.get(run.role) ?? []), marks]);
     cases.set(run.case, sides);
   }
   return cases;
+}
+
+export async function readLaunches(dir: string): Promise<Map<string, Map<'base' | 'head', Launch[]>>> {
+  return parseLaunches(await readFile(join(dir, 'runs.ndjson'), 'utf8').catch(() => ''));
 }
 
 const timed = (m: string) => m.startsWith('phase.') || m.startsWith('mark.');
@@ -94,6 +100,11 @@ export function timelineText(t: CaseTimeline, platform: string): string {
       `  ${label.padEnd(7)}${names.map((n, i) => n0(at(n) ?? Number.NaN).padStart((widths[i] ?? 6) + 2)).join('')}`;
     s.launches.forEach((l, i) => lines.push(row(String(i + 1), (n) => l[n])));
     lines.push(row('median', (n) => s.waterfall.marks.find((m) => m.name === n)?.at));
+    const [common, ...others] = s.waterfall.orders;
+    if (common && others.length)
+      lines.push(
+        `  mark order varied: ${s.waterfall.orders.length} orders, the most common in ${common.n} of ${s.launches.length} launches; each phase's n is the launches that had it`,
+      );
     for (const m of s.waterfall.marks)
       if (m.n < s.launches.length)
         lines.push(`  missing: ${m.name} in ${s.launches.length - m.n} of ${s.launches.length} launches`);

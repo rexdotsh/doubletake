@@ -318,7 +318,7 @@ async function timeline(ref: string | undefined, flags: Flags): Promise<void> {
   );
   if (!all.length)
     throw new Error(
-      `${experiment.id} has no measured launch with marks: set launch.timeline in a case, or have the app write marks`,
+      `${experiment.id} has no measured launch case (experiments from before timelines do not say which runs were launches)`,
     );
   const folder = flags.out ? resolve(flags.out) : dir;
   await mkdir(folder, { recursive: true });

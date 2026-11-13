@@ -2,7 +2,7 @@ import { appendFile, mkdir } from 'node:fs/promises';
 import { cpus } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { Bench, Case } from './bench.ts';
-import { pct } from './bench.ts';
+import { caseKind, pct } from './bench.ts';
 import type { Device } from './device.ts';
 import { Refusal } from './device.ts';
 import { isCount, metricInfo } from './metrics.ts';
@@ -180,7 +180,7 @@ async function measureBlock(o: BenchOptions, name: string, c: Case, v: Variant, 
       });
       await appendFile(
         join(o.dir, 'runs.ndjson'),
-        `${JSON.stringify({ case: name, block: tag, role: v.role, run: i, warmup: i < o.warmup, ...result })}\n`,
+        `${JSON.stringify({ case: name, kind: caseKind(c), block: tag, role: v.role, run: i, warmup: i < o.warmup, ...result })}\n`,
       );
       if (i >= o.warmup) runs.push(result);
     }

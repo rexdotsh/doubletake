@@ -152,7 +152,7 @@ Each launch is then a list of marks, each timed from the launch:
 - the platform's own lines: on Android with React Native's new architecture, `rn.start` (the React host starts creating its instance) and `js.load` (it starts loading the bundle); `js.run` (React Native's `Running "<app>"`, when the bundle has run and the root mounts), `first.frame` (Android: ActivityTaskManager's `Displayed`, the same moment as `launch.ttid`), `splash.removed` (Android 12+: the system splash window is removed) and `fully.drawn` (Android, when the app calls `reportFullyDrawn()`). The iOS origin is the process's exec; Android's is the intent, which the fork follows within a few ms;
 - the app's marks: SDK marks and [perf marks](#the-marks-protocol).
 
-A phase is the gap between two consecutive marks, in the order that launch wrote them: `phase.start->rn.start`, `phase.rn.start->js.load` and so on. Every `mark.<name>` and `phase.<from>-><to>` is a metric like any other: a case can make one its primary, and an A/B compares each with the same pairs, intervals and verdicts. A mark a launch did not write is missing from that launch; doubletake never fills it in.
+A phase is the gap between two consecutive marks, in the order that launch wrote them: `phase.start->rn.start`, `phase.rn.start->js.load` and so on. Every `mark.<name>` and `phase.<from>-><to>` is a metric like any other: a case can make one its primary, and an A/B compares each with the same pairs, intervals and verdicts. A mark a launch did not write is missing from that launch; doubletake never fills it in. A declared phase a run did not have is refused with the reason: an endpoint it did not write (`NoMarker`), or endpoints that were reversed or had other marks between them (`NotAPhase`). `phase.*` metrics need `launch.timeline: true`.
 
 ```
 $ doubletake timeline latest          # a production React Native app, signed in, on an Android emulator
@@ -174,7 +174,7 @@ head: median waterfall, 4,646 ms to the last mark
 SVG: ~/.doubletake/experiments/exp_…/timeline-startup.svg
 ```
 
-`doubletake timeline [exp|latest]` prints each measured launch's marks (warm-ups left out), the median waterfall per side (a phase starts at the median of its first mark and lasts the median gap), the experiment's comparison of each phase and mark when it is an A/B, and which marks some launches missed. It writes one SVG per case: the median phases of each side as bars, then every launch as a strip. `--format json` gives the same per launch and per phase. A `check` works too: one launch per case.
+`doubletake timeline [exp|latest]` prints each measured launch's marks (warm-ups left out), the median waterfall per side (each phase is two marks that were consecutive in a launch, in that direction: it starts at the median time of its first mark in those launches, lasts their median gap, and its `n` says how many launches had it; launches that wrote their marks in different orders are reported as such, never forced onto one path), the experiment's comparison of each phase and mark when it is an A/B, and which marks some launches missed. It writes one SVG per case: the median phases of each side as bars, then every launch as a strip. `--format json` gives the same per launch and per phase. A `check` works too: one launch per case.
 
 ### The marks protocol
 

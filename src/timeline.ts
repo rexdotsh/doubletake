@@ -81,12 +81,32 @@ export function phasesOf(marks: ReadonlyMap<string, number>): { from: string; to
 
 export const phaseMetric = (from: string, to: string) => `phase.${from}->${to}`;
 
+/**
+ * Why a run has no value for a declared phase: an endpoint it did not write, or endpoints that were not
+ * consecutive (reversed, or other marks between them). Mark times are ms after the launch.
+ */
+export function phaseRefusal(metric: string, marks: ReadonlyMap<string, number>): string {
+  const [from = '', to = ''] = metric.slice('phase.'.length).split('->');
+  const at = (name: string) => (name === ORIGIN ? 0 : marks.get(name));
+  const missing = [from, to].filter((name) => (at(name) ?? -1) < 0);
+  if (missing.length) return `NoMarker: the run wrote no ${missing.join(' or ')} mark`;
+  const [begin = 0, end = 0] = [at(from), at(to)];
+  if (end < begin) return `NotAPhase: ${to} came before ${from} in this run`;
+  const between = [...marks].filter(([name, t]) => name !== from && name !== to && t >= begin && t <= end);
+  return `NotAPhase: ${between.map(([name]) => name).join(', ') || 'another mark at the same time'} came between ${from} and ${to} in this run`;
+}
+
 export type Waterfall = {
   launches: number;
   /** Each mark's median time after the launch, in that order, and how many launches wrote it. */
   marks: { name: string; at: number; n: number }[];
-  /** Consecutive marks in the median order: `start` is the median of `from`, `ms` the median gap. */
+  /**
+   * Each directed phase as launches had it (consecutive marks in that launch), by its median start: `start`
+   * is the median time of `from` in those launches, `ms` the median gap, `n` how many launches had it.
+   */
   phases: { from: string; to: string; start: number; ms: number; n: number }[];
+  /** The orders launches wrote their marks in, the most common first: more than one means phases differ. */
+  orders: { marks: string[]; n: number }[];
 };
 
 /** The median waterfall of launches, each given as its marks (`name` to ms after the launch). */
@@ -98,14 +118,26 @@ export function waterfall(launches: readonly Record<string, number>[]): Waterfal
       return { name, at: median(at), n: at.length };
     })
     .toSorted((a, b) => a.at - b.at);
-  const phases = marks.map((to, i) => {
-    const from = marks[i - 1];
-    const gaps = launches.flatMap((l) => {
-      const end = l[to.name];
-      const begin = from ? l[from.name] : 0;
-      return end === undefined || begin === undefined ? [] : [end - begin];
-    });
-    return { from: from?.name ?? ORIGIN, to: to.name, start: from?.at ?? 0, ms: median(gaps), n: gaps.length };
-  });
-  return { launches: launches.length, marks, phases };
+  const pairs = new Map<string, { from: string; to: string; starts: number[]; gaps: number[] }>();
+  const orders = new Map<string, { marks: string[]; n: number }>();
+  for (const launch of launches) {
+    const phases = phasesOf(new Map(Object.entries(launch)));
+    let start = 0;
+    for (const p of phases) {
+      const key = phaseMetric(p.from, p.to);
+      const pair = pairs.get(key) ?? { from: p.from, to: p.to, starts: [], gaps: [] };
+      pair.starts.push(start);
+      pair.gaps.push(p.ms);
+      pairs.set(key, pair);
+      start += p.ms;
+    }
+    const order = phases.map((p) => p.to);
+    const known = orders.get(order.join('\n')) ?? { marks: order, n: 0 };
+    known.n++;
+    orders.set(order.join('\n'), known);
+  }
+  const phases = [...pairs.values()]
+    .map((p) => ({ from: p.from, to: p.to, start: median(p.starts), ms: median(p.gaps), n: p.gaps.length }))
+    .toSorted((a, b) => a.start - b.start || b.n - a.n);
+  return { launches: launches.length, marks, phases, orders: [...orders.values()].toSorted((a, b) => b.n - a.n) };
 }
