@@ -101,4 +101,7 @@ test('a clip without a start clock times launch.visual from its first change', (
   expect(result.first).toBe(1);
   expect(result.visual).toBe(500);
   expect(clockless(frames.slice(0, 100)).refusal).toMatch(/NotSettled/);
+  // A screen already moving when the recording starts: the launch can't be told apart.
+  const wallpaper = [new Uint8Array(72 * 156).fill(60), ...frames.slice(60)];
+  expect(clockless(wallpaper).refusal).toMatch(/NoStillBaseline/);
 });

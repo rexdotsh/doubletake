@@ -116,6 +116,9 @@ async function analyseVideo(
   return { file, first: at / 1000, seconds };
 }
 
+/** The recording runs about 1.5 s before a launch; its first 0.5 s must be still. */
+const STILL_BEFORE_LAUNCH_MS = 500;
+
 /**
  * `launch.visual` from a clip without a start clock: from its first change (the launch's first visible response;
  * the clip starts on a still screen a second before the launch) to the frame after which the screen settles.
@@ -128,7 +131,15 @@ export function clockless(
 ): { first: number; visual?: number; refusal?: string } {
   try {
     const visual = visualTimes(frames, ignore, launchCase ? 1000 : 0);
-    return { first: visual.first / 1000, visual: launchCase ? visual.complete - visual.first : undefined };
+    if (!launchCase) return { first: visual.first / 1000 };
+    // Only a still screen before it makes the first change the launch's: an animated launcher, a live
+    // wallpaper or a leftover transition would add its own time.
+    if (visual.first < STILL_BEFORE_LAUNCH_MS)
+      return {
+        first: visual.first / 1000,
+        refusal: `NoStillBaseline: the screen changed ${Math.round(visual.first)} ms into the recording, before the launch; a still screen is needed to tell where the launch begins`,
+      };
+    return { first: visual.first / 1000, visual: visual.complete - visual.first };
   } catch (error) {
     if (!(error instanceof Refusal)) throw error;
     return { first: 0, refusal: `${error.validator}: ${error.message}` };
