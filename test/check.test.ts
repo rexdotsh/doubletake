@@ -82,6 +82,23 @@ test('a filmed run that fails stops its recorder before the error goes on', asyn
     (error: unknown) => (error instanceof RecorderStuck ? 'stuck' : 'other'),
   );
   expect(stuck).toBe('stuck');
+  // A run that worked but whose recorder won't stop ends the check too.
+  const ok = validate({ cases: { a: { run: [{ sleep: '1ms' }], primary: 'visual.flashes' } } }).cases.a;
+  if (!ok) throw new Error('no case');
+  const stuckAfter = await runOnce({
+    device: { ...device, record: async () => ({ stop: () => Promise.reject(new Error('adb gone')) }) },
+    appId: 'app',
+    bench: { app: {}, cases: {} },
+    case: ok,
+    tap,
+    offset: 0,
+    dir: '.',
+    video: 'x.mp4',
+  }).then(
+    () => 'ok',
+    (error: unknown) => (error instanceof RecorderStuck ? 'stuck' : String(error)),
+  );
+  expect(stuckAfter).toBe('stuck');
 });
 
 test('a recorder that cannot be stopped ends the check', async () => {

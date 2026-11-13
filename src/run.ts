@@ -112,7 +112,11 @@ async function analyseVideo(
   action: number,
 ): Promise<RunResult['video']> {
   const launchCase = caseKind(c) === 'launch';
-  const file = await recording.stop();
+  const file = await recording.stop().catch((error: unknown) => {
+    throw new RecorderStuck(
+      `the recording could not be stopped: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  });
   const frames = await decodeFrames(file);
   const seconds = frames.length / VIDEO_FPS;
   let events: Transition['events'] | undefined;
