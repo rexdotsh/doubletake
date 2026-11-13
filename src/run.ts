@@ -199,6 +199,7 @@ async function launchRun(
   state: FlowState,
   values: RunValues,
   refused: Record<string, string>,
+  filming: { recording?: Recording },
 ): Promise<Filmed> {
   const { device, appId } = ctx;
   const c = ctx.case;
@@ -208,6 +209,7 @@ async function launchRun(
   let recording: Recording | undefined;
   if (ctx.video) {
     recording = await device.record(ctx.video);
+    filming.recording = recording;
     await sleep(1000);
   }
   const launched = await launch(state);
@@ -239,6 +241,7 @@ async function windowRun(
   state: FlowState,
   values: RunValues,
   refused: Record<string, string>,
+  filming: { recording?: Recording },
 ): Promise<Filmed> {
   const { device, appId } = ctx;
   const c = ctx.case;
@@ -248,6 +251,7 @@ async function windowRun(
   if (c.run) await device.prepareInput?.();
   const memoryBefore = declares(c, ['memory.growth']) ? (await device.memory(pid, appId)).endMiB : undefined;
   const recording = ctx.video ? await device.record(ctx.video) : undefined;
+  filming.recording = recording;
   if (recording) await sleep(1000);
   // A counter's snapshot is taken somewhere inside its adb call: time it at the call's midpoint.
   const resetAt = Date.now();
@@ -312,9 +316,18 @@ export async function runOnce(ctx: RunContext): Promise<RunResult> {
     alerts: ctx.bench.alerts,
   };
   const launchCase = caseKind(ctx.case) === 'launch';
-  const { recording, action } = launchCase
-    ? await launchRun(ctx, state, values, refused)
-    : await windowRun(ctx, state, values, refused);
+  // A run that fails mid-recording still stops its recorder: the next run must not be measured beside it.
+  const filming: { recording?: Recording } = {};
+  let outcome: Filmed;
+  try {
+    outcome = launchCase
+      ? await launchRun(ctx, state, values, refused, filming)
+      : await windowRun(ctx, state, values, refused, filming);
+  } catch (error) {
+    await filming.recording?.stop().catch(() => undefined);
+    throw error;
+  }
+  const { recording, action } = outcome;
   const video = recording ? await analyseVideo(recording, values, refused, ctx.bench, ctx.case, action) : undefined;
   return { values, refused, video };
 }
