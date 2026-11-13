@@ -447,12 +447,8 @@ async function check(o: Omit<BenchOptions, 'base' | 'pairs' | 'warmup'>): Promis
         );
       return result;
     });
-    o.experiment.checks.push({
-      case: name,
-      values: b.values,
-      refused: b.refused,
-      ...(b.probes?.[0] && { probe: b.probes[0] }),
-    });
+    const probe = b.probes?.[0];
+    o.experiment.checks.push({ case: name, values: b.values, refused: b.refused, ...(probe && { probe }) });
     o.log(
       `${name}: ${Object.keys(b.refused).includes(c.primary) ? `refused: ${b.refused[c.primary]}` : `${c.primary} ${fmt(b.values[c.primary])}`}`,
     );

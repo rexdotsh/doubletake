@@ -172,25 +172,25 @@ export function installProbe(g: object): Probe {
     commits.push([Date.now(), [...counts.values()]]);
   };
 
-  let hook: unknown = Reflect.get(g, '__REACT_DEVTOOLS_GLOBAL_HOOK__');
-  if (!isObject(hook)) {
-    const renderers = new Map<number, unknown>();
-    hook = {
-      supportsFiber: true,
-      renderers,
-      inject: (renderer: unknown) => {
-        renderers.set(renderers.size + 1, renderer);
-        return renderers.size;
-      },
-      onCommitFiberRoot: () => undefined,
-      onCommitFiberUnmount: () => undefined,
-      onPostCommitFiberRoot: () => undefined,
-      onScheduleFiberRoot: () => undefined,
-      checkDCE: () => undefined,
-    };
-    Reflect.set(g, '__REACT_DEVTOOLS_GLOBAL_HOOK__', hook);
-  }
-  const devtools = hook;
+  // A dev build's DevTools hook, or a minimal one React attaches to when it starts after this.
+  const existing: unknown = Reflect.get(g, '__REACT_DEVTOOLS_GLOBAL_HOOK__');
+  const attached = new Map<number, unknown>();
+  const devtools: object = isObject(existing)
+    ? existing
+    : {
+        supportsFiber: true,
+        renderers: attached,
+        inject: (renderer: unknown) => {
+          attached.set(attached.size + 1, renderer);
+          return attached.size;
+        },
+        onCommitFiberRoot: () => undefined,
+        onCommitFiberUnmount: () => undefined,
+        onPostCommitFiberRoot: () => undefined,
+        onScheduleFiberRoot: () => undefined,
+        checkDCE: () => undefined,
+      };
+  if (devtools !== existing) Reflect.set(g, '__REACT_DEVTOOLS_GLOBAL_HOOK__', devtools);
   const previous: unknown = Reflect.get(devtools, 'onCommitFiberRoot');
   Reflect.set(devtools, 'onCommitFiberRoot', function (this: unknown, ...args: unknown[]) {
     if (on)
