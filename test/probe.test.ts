@@ -165,13 +165,27 @@ test('the probe runs from its source text alone, as CDP injects it, and installs
 test('a bridge may give only aggregates; whatever is missing is refused', () => {
   const window = { from: 10_000, to: 11_200 };
   const { detail, refused } = readProbe(
-    { requests: 5, duplicates: 2, bytes: 900, top: [{ key: 'GET /a', count: 3 }], commits: 7, renders: 40, ms: 1250 },
+    {
+      requests: 5,
+      duplicates: 2,
+      bytes: 900,
+      top: [{ key: 'GET /a', count: 3 }],
+      commits: 7,
+      renders: 40,
+      renderers: 1,
+      ms: 1250,
+    },
     window,
   );
   expect(detail).toMatchObject({ ms: 1250, requests: 5, duplicates: 2, commits: 7, renders: 40, overrun: 50 });
   expect(detail.keys).toEqual([{ key: 'GET /a', count: 3, bytes: 0 }]);
   expect(refused).toEqual({});
-  expect(readProbe({ requests: 2, ms: 1200 }, window).refused['probe.renders']).toStartWith('NoProbe');
+  expect(readProbe({ requests: 2, renderers: 1, ms: 1200 }, window).refused['probe.renders']).toStartWith('NoProbe');
+  // Zero commits without a renderer count cannot be told from a hook React never reached.
+  const blind = readProbe({ ms: 1200, commits: 0, renders: 0, requests: 1, duplicates: 0, bytes: 1 }, window);
+  expect(blind.refused['probe.commits']).toStartWith('NoRenderer: the app gave no renderer count');
+  expect(blind.refused['probe.renders']).toStartWith('NoRenderer');
+  expect([blind.detail.commits, blind.detail.renders, blind.detail.requests]).toEqual([undefined, undefined, 1]);
   expect(readProbe({ renderers: 0, ms: 1200 }, window).refused['probe.commits']).toStartWith('NoRenderer');
   expect(Object.keys(readProbe(null, window).refused)).toHaveLength(5);
   // No span to check against the window, or one too far off it: nothing is trusted.
@@ -216,6 +230,18 @@ test("the probe's record is complete or refused: lists, entries, caps", () => {
     'UnknownBody',
   );
   expect(why({ requests: [{ method: 'POST', url: '/', body: '?', start: 0 }] }, 'probe.requests')).toBe('');
+  // Two finished POSTs without fingerprints or sizes are not one duplicate and zero bytes.
+  const bare = { method: 'POST', url: '/', status: 200, start: 0, end: 5 };
+  const twice = readProbe(record({ requests: [bare, bare] }), window);
+  expect(twice.refused['probe.duplicates']).toStartWith('InvalidProbe: 2 requests without query and body');
+  expect(twice.refused['probe.bytes']).toStartWith('InvalidProbe: 2 requests without a size');
+  expect(twice.refused['probe.requests']).toBeUndefined();
+  expect([twice.detail.duplicates, twice.detail.bytes, twice.detail.keys, twice.detail.requests]).toEqual([
+    undefined,
+    undefined,
+    undefined,
+    2,
+  ]);
 });
 
 test('the probe counts only what happened inside the window it is asked for', () => {
@@ -300,7 +326,12 @@ test('a bridge keeps one log follower for its session and reads the window it is
       const query = new URL(url).searchParams;
       const script = query.get('c') ?? '';
       const reply = script.startsWith('read')
-        ? { ok: true, steps: [{ value: { requests: 1, duplicates: 0, bytes: 2, commits: 3, renders: 4, ms: 1000 } }] }
+        ? {
+            ok: true,
+            steps: [
+              { value: { requests: 1, duplicates: 0, bytes: 2, commits: 3, renders: 4, renderers: 1, ms: 1000 } },
+            ],
+          }
         : { ok: true };
       queueMicrotask(() => deliver?.(`I ReactNativeJS: [APP] ${query.get('n')} 1/1 ${JSON.stringify(reply)}`));
     },
@@ -375,6 +406,10 @@ test('the CDP target is exactly the app, on exactly this device, and only one', 
     url: 'ws://new',
   });
   expect(pickTarget({}, 'x', 'y')).toEqual({ refusal: "Metro's /json/list is not a list" });
+  // A runtime Metro names no device for cannot be checked: refused, even when it is the only one.
+  expect(pickTarget([{ appId: 'com.app', webSocketDebuggerUrl: 'ws://u' }], 'com.app', emulator)).toEqual({
+    refusal: "Metro names no device for com.app's runtime, so it cannot be told to be sdk_phone (emulator)'s",
+  });
 });
 
 const failed = (p: Promise<unknown>) =>

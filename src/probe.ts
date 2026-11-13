@@ -107,21 +107,30 @@ function requestKey(r: Pick<ProbeRequest, 'method' | 'url' | 'query' | 'body'>):
   return `${r.method} ${r.url}${r.query ? `?#${r.query}` : ''}${r.body ? ` body#${r.body}` : ''}`;
 }
 
-function request(value: unknown): ProbeRequest | undefined {
+/**
+ * One request entry; `identified`: it carries the query and body fingerprints duplicates need, `sized`: the size
+ * bytes need. An entry without method, URL or start is unreadable.
+ */
+function request(value: unknown): { r: ProbeRequest; identified: boolean; sized: boolean } | undefined {
   if (!isRecord(value)) return undefined;
   const { method, url, query, body } = value;
   const start = num(value.start);
+  const bytes = num(value.bytes);
   if (typeof method !== 'string' || typeof url !== 'string' || start === undefined) return undefined;
   return {
-    method,
-    url,
-    query: typeof query === 'string' ? query : '',
-    body: typeof body === 'string' ? body : '',
-    status: num(value.status) ?? 0,
-    bytes: num(value.bytes) ?? 0,
-    start,
-    headers: num(value.headers),
-    end: num(value.end),
+    r: {
+      method,
+      url,
+      query: typeof query === 'string' ? query : '',
+      body: typeof body === 'string' ? body : '',
+      status: num(value.status) ?? 0,
+      bytes: bytes ?? 0,
+      start,
+      headers: num(value.headers),
+      end: num(value.end),
+    },
+    identified: typeof query === 'string' && typeof body === 'string' && body !== '?',
+    sized: bytes !== undefined,
   };
 }
 
@@ -158,7 +167,8 @@ function refuseAll(refused: Record<string, string>, metrics: readonly string[], 
 function readRecord(value: Record<string, unknown>, detail: ProbeDetail, refused: Record<string, string>): void {
   const raw = value.requests;
   const requests = Array.isArray(raw) ? raw.map(request) : [];
-  const valid = requests.filter((r) => r !== undefined);
+  const entries = requests.filter((e) => e !== undefined);
+  const valid = entries.map((e) => e.r);
   const dropped = num(value.dropped);
   if (value.network === false)
     refuseAll(refused, NET_METRICS, 'NoNetwork: the app has no XMLHttpRequest for the probe to watch');
@@ -179,11 +189,13 @@ function readRecord(value: Record<string, unknown>, detail: ProbeDetail, refused
     Object.assign(detail, network(valid), {
       waterfall: valid.toSorted((a, b) => a.start - b.start).slice(0, WATERFALL),
     });
-    const unknown = valid.filter((r) => r.body === '?').length;
-    if (unknown) {
-      detail.duplicates = undefined;
-      refused['probe.duplicates'] = `UnknownBody: ${unknown} request bodies the probe cannot fingerprint`;
-    }
+    const unknown = entries.filter((e) => e.r.body === '?').length;
+    const unnamed = entries.filter((e) => !e.identified && e.r.body !== '?').length;
+    const unsized = entries.filter((e) => !e.sized).length;
+    if (unknown) refused['probe.duplicates'] = `UnknownBody: ${unknown} request bodies the probe cannot fingerprint`;
+    else if (unnamed)
+      refused['probe.duplicates'] = `InvalidProbe: ${unnamed} requests without query and body fingerprints`;
+    if (unsized) refused['probe.bytes'] = `InvalidProbe: ${unsized} requests without a size`;
   }
   const renderers = num(value.renderers);
   const droppedCommits = num(value.droppedCommits);
@@ -213,7 +225,14 @@ function readRecord(value: Record<string, unknown>, detail: ProbeDetail, refused
 
 /** What a simpler bridge gives: totals only. */
 function readAggregate(value: Record<string, unknown>, detail: ProbeDetail, refused: Record<string, string>): void {
-  if (num(value.renderers) === 0)
+  const renderers = num(value.renderers);
+  if (renderers === undefined)
+    refuseAll(
+      refused,
+      RENDER_METRICS,
+      'NoRenderer: the app gave no renderer count, so zero commits cannot be told from a hook React never reached',
+    );
+  else if (renderers === 0)
     refuseAll(refused, RENDER_METRICS, 'NoRenderer: the app says no React renderer reached its hook');
   else {
     detail.commits = num(value.commits);

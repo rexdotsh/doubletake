@@ -35,12 +35,13 @@ export function pickTarget(list: unknown, appId: string, device: string): { url:
   const mine = list.filter(isRecord).filter((t) => t.appId === appId || t.description === appId);
   const withUrl = mine.filter((t) => typeof t.webSocketDebuggerUrl === 'string');
   const named = withUrl.filter((t) => typeof t.deviceName === 'string');
-  const here = named.length ? named.filter((t) => sameDevice(String(t.deviceName), device)) : withUrl;
+  const here = named.filter((t) => sameDevice(String(t.deviceName), device));
+  if (!withUrl.length) return { refusal: `no runtime of ${appId} (${list.length} listed)` };
+  if (!named.length)
+    return { refusal: `Metro names no device for ${appId}'s runtime, so it cannot be told to be ${device}'s` };
   if (!here.length)
     return {
-      refusal: withUrl.length
-        ? `${appId} runs on ${[...new Set(named.map((t) => String(t.deviceName)))].join(', ')}, not ${device}`
-        : `no runtime of ${appId} (${list.length} listed)`,
+      refusal: `${appId} runs on ${[...new Set(named.map((t) => String(t.deviceName)))].join(', ')}, not ${device}`,
     };
   const devices = new Set(here.map(deviceOf));
   if (devices.size > 1)
