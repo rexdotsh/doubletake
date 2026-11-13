@@ -60,6 +60,11 @@ export type Bench = {
   ignore?: [number, number, number, number][];
   /** Where `probe.*` metrics come from: Metro (CDP, dev clients) or a bridge in the app. */
   probe?: ProbeConfig;
+  /**
+   * `--profile` on a release build: the app's own JS profiler hook, steps that start and stop it and where it
+   * writes the profile (Android: absolute or under the app's data folder; iOS: under its data container).
+   */
+  profile?: { js?: { start?: Step[]; stop: Step[]; file: { ios?: string; android?: string } } };
 };
 
 export type CaseKind = 'launch' | 'run' | 'idle';
@@ -288,7 +293,7 @@ function region(value: unknown, where: string): [number, number, number, number]
 /** Parses an untrusted bench object once, at the edge, into a typed bench. */
 export function validate(raw: unknown): Bench {
   const bench = object(raw, 'bench');
-  keys(bench, ['app', 'cases', 'runs', 'alerts', 'ignore', 'probe'], 'bench');
+  keys(bench, ['app', 'cases', 'runs', 'alerts', 'ignore', 'probe', 'profile'], 'bench');
   const app = object(bench.app ?? {}, 'app');
   keys(app, ['ios', 'android'], 'app');
   const cases = object(bench.cases, 'cases');
@@ -311,6 +316,27 @@ export function validate(raw: unknown): Bench {
     alerts: optional(bench.alerts, (v) => list(v, 'alerts').map((b, i) => string(b, `alerts[${i}]`))),
     ignore: optional(bench.ignore, (v) => list(v, 'ignore').map((r, i) => region(r, `ignore[${i}]`))),
     probe: optional(bench.probe, probeConfig),
+    profile: optional(bench.profile, profileHook),
+  };
+}
+
+function profileHook(value: unknown): Bench['profile'] {
+  const p = object(value, 'profile');
+  keys(p, ['js'], 'profile');
+  if (p.js === undefined) return {};
+  const js = object(p.js, 'profile.js');
+  keys(js, ['start', 'stop', 'file'], 'profile.js');
+  const file = object(js.file, 'profile.js.file');
+  keys(file, ['ios', 'android'], 'profile.js.file');
+  return {
+    js: {
+      start: optional(js.start, (v) => steps(v, 'profile.js.start')),
+      stop: steps(js.stop, 'profile.js.stop'),
+      file: {
+        ios: optional(file.ios, (v) => string(v, 'profile.js.file.ios')),
+        android: optional(file.android, (v) => string(v, 'profile.js.file.android')),
+      },
+    },
   };
 }
 

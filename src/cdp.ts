@@ -62,7 +62,7 @@ export function pickTarget(list: unknown, appId: string, device: string): { url:
   return { url: String((modern.length ? modern : here).at(-1)?.webSocketDebuggerUrl) };
 }
 
-async function find(metro: string, appId: string, device: string, d: Deadlines): Promise<string> {
+export async function find(metro: string, appId: string, device: string, d: Deadlines = DEADLINES): Promise<string> {
   const end = Date.now() + d.find;
   for (;;) {
     let why: string;
@@ -80,7 +80,12 @@ async function find(metro: string, appId: string, device: string, d: Deadlines):
   }
 }
 
-type Socket = { evaluate(expression: string): Promise<unknown>; close(): void };
+type Socket = {
+  evaluate(expression: string): Promise<unknown>;
+  /** Any other method: its result, or an error with the runtime's message. */
+  send(method: string, params?: object): Promise<unknown>;
+  close(): void;
+};
 
 export async function connect(url: string, d: Deadlines = DEADLINES): Promise<Socket> {
   const ws = new WebSocket(url);
@@ -136,6 +141,11 @@ export async function connect(url: string, d: Deadlines = DEADLINES): Promise<So
       if (error !== undefined || !isRecord(result) || !isRecord(result.result))
         throw new Error(`Runtime.evaluate failed in the app: ${JSON.stringify(error ?? answer).slice(0, 300)}`);
       return result.result.value;
+    },
+    async send(method, params = {}) {
+      const answer = await call(method, params);
+      if (isRecord(answer.error)) throw new Error(`${method} failed in the app: ${String(answer.error.message)}`);
+      return answer.result;
     },
     close: () => ws.close(),
   };

@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { validate } from '../src/bench.ts';
 import { called, diffProfiles } from '../src/profile/diff.ts';
 import { flameSvg } from '../src/profile/flame.ts';
 import { parseCpuProfile, parseHermesTrace, parseJsProfile, toCpuProfile } from '../src/profile/hermes.ts';
@@ -339,6 +340,17 @@ test('a profile written as .cpuprofile reads back to the same costs', () => {
   const before = costs(p);
   expect(back.ms).toBeCloseTo(before.ms, 1);
   expect(get(back.functions, (f) => f.name === 'layout').self).toBeCloseTo(12, 1);
+});
+
+test('a bench file may declare an app profiler hook, and is checked', () => {
+  const bench = validate({
+    cases: { idle: { idle: '5s', primary: 'cpu.idle' } },
+    profile: { js: { stop: [{ open: 'app://profile/stop' }], file: { android: 'cache/profiles/' } } },
+  });
+  expect(bench.profile?.js?.file.android).toBe('cache/profiles/');
+  expect(() => validate({ cases: bench.cases, profile: { js: { stop: [], file: { web: 'x' } } } })).toThrow(
+    'unknown key web',
+  );
 });
 
 test('the report and the card show the profile and what moved', () => {

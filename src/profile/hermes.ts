@@ -11,7 +11,7 @@ const META = new Set(['(root)', '[root]', '(program)']);
 const IDLE = new Set(['(idle)', '[idle]']);
 
 /** A JSON scalar as text; anything else as empty. */
-const str = (v: unknown) => (typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '');
+export const str = (v: unknown) => (typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '');
 
 const num = (v: unknown) => (typeof v === 'number' ? v : typeof v === 'string' && v !== '' ? Number(v) : Number.NaN);
 

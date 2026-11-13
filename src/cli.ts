@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from 'node:fs/promises';
+import { access, mkdir, writeFile } from 'node:fs/promises';
 import { cpus, totalmem } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -9,6 +9,7 @@ import { Refusal } from './device.ts';
 import { androidDevice } from './android.ts';
 import { appRoot, bundleReport, groupAppCode, readBundle } from './bundle.ts';
 import { runBench, runCheck } from './experiment.ts';
+import type { Symbols } from './profile/session.ts';
 import { serve } from './mcp.ts';
 import { iosDevice, listSimulators } from './ios.ts';
 import type { Platform } from './metrics.ts';
@@ -42,6 +43,13 @@ const USAGE = `doubletake ${pkg.version}: A/B performance for React Native apps 
   --host "<ssh command>"  run on that machine (e.g. "ssh mac"): builds and bench file go over, results come back
   --host-init "<shell>"   run first on the host (e.g. ". ~/env.sh")
   --video [case]          after the pairs, film one more run per side and put them side by side
+  --profile               after each case's pairs, profiled pairs (never timed): native (simpleperf on Android,
+                          sample on iOS) and JS (Hermes, with --metro or the bench's profile hook); a check
+                          profiles head once; with --pairs 0, profiles only
+  --profile-pairs <n>     profiled pairs per case (default 6)
+  --metro <url>           Metro for JS profiles of a dev build (e.g. http://localhost:8081)
+  --base-map, --head-map <file>          the JS source map (default: <build>.map beside the build)
+  --base-mapping, --head-mapping <file>  the R8 mapping (default: <build>.mapping.txt beside the build)
   --side-by-side          iOS: install both builds as copies under <bundle id>.doubletake{base,head}, so both stay
                           installed (no reinstall per block); copies have no entitlements and fresh containers
   --queue <duration>      how long the whole bench may wait for a quiet host (default 30m), then exit 4
@@ -68,6 +76,13 @@ type Flags = {
   queue?: string;
   'side-by-side'?: boolean;
   'fail-on-regression'?: boolean;
+  profile?: boolean;
+  'profile-pairs'?: string;
+  metro?: string;
+  'base-map'?: string;
+  'head-map'?: string;
+  'base-mapping'?: string;
+  'head-mapping'?: string;
   json?: boolean;
   format?: string;
   comment?: string;
@@ -94,6 +109,13 @@ const OPTIONS = {
   queue: { type: 'string' },
   'side-by-side': { type: 'boolean' },
   'fail-on-regression': { type: 'boolean' },
+  profile: { type: 'boolean' },
+  'profile-pairs': { type: 'string' },
+  metro: { type: 'string' },
+  'base-map': { type: 'string' },
+  'head-map': { type: 'string' },
+  'base-mapping': { type: 'string' },
+  'head-mapping': { type: 'string' },
   json: { type: 'boolean' },
   format: { type: 'string' },
   comment: { type: 'string' },
@@ -185,10 +207,16 @@ async function remote(command: 'bench' | 'check', file: string, ssh: string, fla
       .filter(Boolean)
       .map((s) => basename((s ?? '').replace(/^host:/, '')).replace(/\.(app|apk)\/?$/, ''))
       .join(',');
-  const passthrough = (['pairs', 'runs', 'warmup', 'device', 'video', 'queue'] as const).flatMap((k) => {
+  const passthrough = (
+    ['pairs', 'runs', 'warmup', 'device', 'video', 'queue', 'profile-pairs', 'metro'] as const
+  ).flatMap((k) => {
     const v = flags[k];
     return v ? [`--${k}`, v] : [];
   });
+  for (const k of ['base-map', 'head-map', 'base-mapping', 'head-mapping'] as const) {
+    const v = flags[k];
+    if (v) sent.push(`--${k}`, v.startsWith('host:') ? v.slice('host:'.length) : await sendArtifact(host, resolve(v)));
+  }
   const platform = platformOf(flags, [flags.base, flags.head]);
   const fetched = await runRemote(host, {
     id,
@@ -207,6 +235,7 @@ async function remote(command: 'bench' | 'check', file: string, ssh: string, fla
       ...passthrough,
       ...(flags['fail-on-regression'] ? ['--fail-on-regression'] : []),
       ...(flags['side-by-side'] ? ['--side-by-side'] : []),
+      ...(flags.profile ? ['--profile'] : []),
     ],
   });
   if (!fetched) return;
@@ -227,6 +256,11 @@ async function measure(command: 'bench' | 'check', file: string | undefined, fla
   const [baseLabel, headLabel] = flags.labels?.split(',') ?? [];
   let head = await variant(device, 'head', flags.head, headLabel);
   let base = command === 'bench' && flags.base ? await variant(device, 'base', flags.base, baseLabel) : head;
+  // Before --side-by-side swaps the builds for copies: the maps sit beside the originals.
+  const symbols = {
+    base: await symbolFiles(base.artifact, flags['base-map'], flags['base-mapping']),
+    head: await symbolFiles(head.artifact, flags['head-map'], flags['head-mapping']),
+  };
   const id = flags.id ?? newId('exp');
   const dir = experimentDir(id);
   if (flags['side-by-side'] && command === 'bench' && base.appId === head.appId && base.artifact && head.artifact) {
@@ -281,7 +315,26 @@ async function measure(command: 'bench' | 'check', file: string | undefined, fla
   };
   log(`doubletake ${id}: ${device.name} (${device.os}), ${cases.length} case(s), results in ${dir}`);
   const queue = { budgetMs: flags.queue ? ms(flags.queue) : 30 * 60_000, waitedMs: 0 };
-  const common = { device, bench: loaded, file: resolve(file), cases, head, runs, dir, experiment, log, queue };
+  const profile = flags.profile
+    ? {
+        pairs: int(flags['profile-pairs'], 'profile-pairs') ?? 6,
+        metro: flags.metro,
+        symbols,
+      }
+    : undefined;
+  const common = {
+    device,
+    bench: loaded,
+    file: resolve(file),
+    cases,
+    head,
+    runs,
+    dir,
+    experiment,
+    log,
+    queue,
+    profile,
+  };
   if (flags.video && !cases.includes(flags.video))
     throw new Error(`--video ${flags.video}: no such case (${cases.join(', ')})`);
   const done =
@@ -293,7 +346,25 @@ async function measure(command: 'bench' | 'check', file: string | undefined, fla
     process.exitCode = 4;
   else if (flags['fail-on-regression'] && done.series.some((s) => s.primary.verdict_kind === 'worse'))
     process.exitCode = 6;
-  else if (command === 'bench' && !done.decided) process.exitCode = 5;
+  else if (command === 'bench' && !done.decided && !(pairs === 0 && profile)) process.exitCode = 5;
+}
+
+const exists = (path: string) =>
+  access(path).then(
+    () => true,
+    () => false,
+  );
+
+/** A side's source map and R8 mapping: as given, else `<build>.map` and `<build>.mapping.txt` beside the build. */
+async function symbolFiles(artifact: string | undefined, map?: string, r8?: string): Promise<Symbols> {
+  const stem = artifact?.replace(/\/$/, '').replace(/\.(app|apk)$/, '');
+  const find = async (given: string | undefined, suffix: string) => {
+    if (given) return resolve(given);
+    for (const path of stem ? [`${stem}${suffix}`, `${artifact?.replace(/\/$/, '')}${suffix}`] : [])
+      if (await exists(path)) return path;
+    return undefined;
+  };
+  return { map: await find(map, '.map'), r8: await find(r8, '.mapping.txt') };
 }
 
 async function report(ref: string | undefined, flags: Flags): Promise<void> {
