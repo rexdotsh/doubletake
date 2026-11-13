@@ -67,8 +67,11 @@ function duplicates(d: ProbeDetail): string[] {
     .map((k) => `${k.key} ×${k.count}${k.bytes ? ` (${bytes(k.bytes)})` : ''}`);
 }
 
-/** One line per request: a bar over the window, start, duration, status, size, method and URL. */
-export function waterfall(requests: readonly ProbeRequest[], ms: number): string[] {
+/**
+ * One line per request: a bar over the window, start, duration, status, size, method and URL. A size is `—` while
+ * in flight, or for every request when the window's bytes were refused (`sized` false).
+ */
+export function waterfall(requests: readonly ProbeRequest[], ms: number, sized = true): string[] {
   const span = Math.max(ms, ...requests.map((r) => r.end ?? r.start), 1);
   const at = (t: number) => Math.min(BAR - 1, Math.floor((t / span) * BAR));
   return requests.map((r) => {
@@ -77,7 +80,7 @@ export function waterfall(requests: readonly ProbeRequest[], ms: number): string
     const bar = `${' '.repeat(from)}${(r.end === undefined ? '…' : '█').repeat(to - from + 1)}`.padEnd(BAR);
     const took = r.end === undefined ? 'open' : `${Math.round(r.end - r.start)} ms`;
     const query = r.query ? `?#${r.query}` : '';
-    return `▕${bar}▏ ${`+${Math.round(r.start)}`.padStart(6)} ${took.padStart(8)}  ${String(r.status || '—').padStart(3)} ${bytes(r.bytes).padStart(9)}  ${r.method} ${r.url}${query}`;
+    return `▕${bar}▏ ${`+${Math.round(r.start)}`.padStart(6)} ${took.padStart(8)}  ${String(r.status || '—').padStart(3)} ${(sized && r.end !== undefined ? bytes(r.bytes) : '—').padStart(9)}  ${r.method} ${r.url}${query}`;
   });
 }
 
@@ -105,7 +108,7 @@ function details({ base, head }: Sides, indent: string): string[] {
   for (const [side, d] of sides) {
     if (!d.waterfall?.length) continue;
     lines.push(`${indent}requests${side}, ${(d.ms / 1000).toFixed(1)} s window:`);
-    lines.push(...waterfall(d.waterfall, d.ms).map((l) => `${indent}  ${l}`));
+    lines.push(...waterfall(d.waterfall, d.ms, d.bytes !== undefined).map((l) => `${indent}  ${l}`));
   }
   return lines;
 }
