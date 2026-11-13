@@ -46,6 +46,8 @@ function verdict(c: Comparison): string {
       return c.exact ? `${worse} (exact)` : worse;
     case 'same':
       return c.exact ? 'same (exact)' : `same (${boundText})`;
+    case 'noise':
+      return `within noise (±${((c.floor ?? 0) * 100).toFixed(1).replace(/\.0$/, '')}%)`;
     case 'unclear':
       return 'unclear';
     case 'underpowered':

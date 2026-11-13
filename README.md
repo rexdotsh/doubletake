@@ -66,6 +66,8 @@ A case is one of:
 - `run`: untimed `setup` steps, then timed `run` steps.
 - `idle`: untimed `setup`, then sit on the screen and measure CPU per second and requests: polling shows up here.
 
+Any case can also set `runs` (measured runs per block), `bound` (the `same` band, `'2%'` by default) and `floor` (a noise floor, such as `'4%'`: see below).
+
 Steps: `launch`, `terminate`, `{ open: url }` (deep link), `{ wait: 'mark:name' }`, `{ sleep: '2s' }`, `{ tap: … }`, `{ swipe: { from, to } }`, `{ scroll: 'down', times }`, `{ maestro: 'flow.yaml' }`, `{ shell: '…' }`.
 
 A tap takes a place or an element:
@@ -108,8 +110,9 @@ The SDK has no dependencies and no timers: each event is one log line written wh
 - Each side gets one discarded warm-up block, then pairs alternate base, head and head, base. A block installs the build (when both share a bundle id), does one discarded run, then 3 measured runs; the block's value is their median.
 - Per pair: the log ratio head/base (or the difference for counts and zeros). The change is their mean, with a bootstrap interval (10,000 resamples, expanded percentile for small samples). A direction also needs the Wilcoxon signed-rank test to agree. In 2,000 simulated A/A experiments per row (fixed 6 to 20 pairs, normal and t3 noise at σ 3%) that gate brought false calls from up to 6.4% down to 2.6–4.3%; the sequential looks are simulated in the test suite too. This is checked by simulation, not proven: say so when you quote a borderline result.
 - `--pairs auto` (the default) looks at 8, 12, 18, 26 and 40 pairs at 98.42% each (Pocock), and stops at the first verdict. Fewer than 6 pairs never decide.
-- Verdicts: `faster`/`slower` (or `less`/`more`, `fewer`/`more`), `same (±2%)`, `unclear`, `underpowered (~N pairs needed)`. A count that every run read the same compares exactly.
+- Verdicts: `faster`/`slower` (or `less`/`more`, `fewer`/`more`), `same (±2%)`, `within noise (±4%)` (with a `floor`), `unclear`, `underpowered (~N pairs needed)`. A count that every run read the same compares exactly.
 - Declared secondaries get words only after the primary decided, at a Bonferroni level; the rest are descriptive (`·`).
+- **Run an A/A first.** Bench one build against itself, or two builds of the same source through your pipeline, and set the case's `floor` to what it moved. An interval inside ±floor then reads `within noise (±4%)`; a direction whose estimate is under the floor but whose interval reaches past it reads `unclear` and gets more pairs. The statistics compare the two sides, not their source code: whatever else differs between two builds (signing, packaging, install state) is in the comparison. In one A/A on an Android emulator (two builds with byte-identical JS bundles, cold-start CPU, 8 pairs), every pair read the second build 0–5% higher, in both orders (AB pairs +2.3%, BA pairs +2.25%), with no trend across pairs, and a Student t interval on the same pairs matched the bootstrap (+0.8% … +3.8%). That does not show where the difference came from; it shows a floor is needed.
 
 ## Commands
 

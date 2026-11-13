@@ -191,7 +191,13 @@ async function measureBlock(o: BenchOptions, name: string, c: Case, v: Variant, 
   return { values, refused, varying };
 }
 
-function comparisonOf(metric: string, pairs: [Block, Block][], level: number, bound: number): Comparison | null {
+function comparisonOf(
+  metric: string,
+  pairs: [Block, Block][],
+  level: number,
+  bound: number,
+  floor?: number,
+): Comparison | null {
   const info = metricInfo(metric);
   if (!info) return null;
   const usable = pairs.filter(([b, h]) => b.values[metric] !== undefined && h.values[metric] !== undefined);
@@ -206,6 +212,7 @@ function comparisonOf(metric: string, pairs: [Block, Block][], level: number, bo
       count: isCount(metric) && usable.every(([b, h]) => !b.varying.has(metric) && !h.varying.has(metric)),
       level,
       bound,
+      floor,
     },
   );
 }
@@ -218,6 +225,7 @@ function isLook(n: number, o: BenchOptions): boolean {
 async function series(o: BenchOptions, name: string): Promise<Series> {
   const c = caseOf(o.bench, name);
   const bound = c.bound ? pct(c.bound) : DEFAULT_BOUND;
+  const floor = c.floor ? pct(c.floor) : undefined;
   const maxPairs = o.pairs === 'auto' ? get(LOOKS, LOOKS.length - 1) : o.pairs;
   const level = o.pairs === 'auto' ? POCOCK_LEVEL : 0.95;
   const pairs: [Block, Block][] = [];
@@ -243,7 +251,7 @@ async function series(o: BenchOptions, name: string): Promise<Series> {
       `${name}: pair ${i + 1}  base ${fmt(b)}  head ${fmt(h)}  ${b && h ? `${h >= b ? '+' : ''}${(((h - b) / b) * 100).toFixed(1)}%` : ''}`,
     );
     if (!isLook(pairs.length, o)) continue;
-    primary = comparisonOf(c.primary, pairs, level, bound);
+    primary = comparisonOf(c.primary, pairs, level, bound, floor);
     if (!primary) continue;
     if (primary.decided) {
       stopped = `decided at ${pairs.length} pairs`;
@@ -258,7 +266,7 @@ async function series(o: BenchOptions, name: string): Promise<Series> {
       break;
     }
   }
-  primary ??= comparisonOf(c.primary, pairs, level, bound);
+  primary ??= comparisonOf(c.primary, pairs, level, bound, floor);
   if (!primary) throw new Refusal('PrimaryRefused', `${name}: no values for ${c.primary}`);
 
   const declared = new Set(c.metrics ?? []);
@@ -269,7 +277,7 @@ async function series(o: BenchOptions, name: string): Promise<Series> {
   // equivalence claims are both corrected; the rest are descriptive intervals at 95%.
   const tests = Math.max(1, others.filter((m) => declared.has(m)).length);
   const secondaries = others
-    .map((m) => comparisonOf(m, pairs, declared.has(m) ? 1 - 0.05 / tests : 0.95, bound))
+    .map((m) => comparisonOf(m, pairs, declared.has(m) ? 1 - 0.05 / tests : 0.95, bound, floor))
     .filter((x): x is Comparison => x !== null);
   for (const s of secondaries) {
     if (s.exact) continue;
