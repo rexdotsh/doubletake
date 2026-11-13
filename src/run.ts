@@ -8,6 +8,9 @@ import { sleep } from './sh.ts';
 import { type Region, type Transition, VIDEO_FPS, decodeFrames, transition, visualTimes } from './visual.ts';
 
 type RunValues = Record<string, number>;
+/** A failed run whose recorder may still be running: nothing measured after it would be valid, so it ends a check. */
+export class RecorderStuck extends Error {}
+
 /** A run's recording, if filmed, and when its action began (host clock). */
 type Filmed = { recording?: Recording; action: number };
 /** A measured window and the start of the app process in it, device clock. */
@@ -109,7 +112,11 @@ async function analyseVideo(
   action: number,
 ): Promise<RunResult['video']> {
   const launchCase = caseKind(c) === 'launch';
-  const file = await recording.stop();
+  const file = await recording.stop().catch((error: unknown) => {
+    throw new RecorderStuck(
+      `the recording could not be stopped: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  });
   const frames = await decodeFrames(file);
   const seconds = frames.length / VIDEO_FPS;
   let events: Transition['events'] | undefined;
@@ -199,6 +206,7 @@ async function launchRun(
   state: FlowState,
   values: RunValues,
   refused: Record<string, string>,
+  filming: { recording?: Recording },
 ): Promise<Filmed> {
   const { device, appId } = ctx;
   const c = ctx.case;
@@ -208,6 +216,7 @@ async function launchRun(
   let recording: Recording | undefined;
   if (ctx.video) {
     recording = await device.record(ctx.video);
+    filming.recording = recording;
     await sleep(1000);
   }
   const launched = await launch(state);
@@ -239,6 +248,7 @@ async function windowRun(
   state: FlowState,
   values: RunValues,
   refused: Record<string, string>,
+  filming: { recording?: Recording },
 ): Promise<Filmed> {
   const { device, appId } = ctx;
   const c = ctx.case;
@@ -248,6 +258,7 @@ async function windowRun(
   if (c.run) await device.prepareInput?.();
   const memoryBefore = declares(c, ['memory.growth']) ? (await device.memory(pid, appId)).endMiB : undefined;
   const recording = ctx.video ? await device.record(ctx.video) : undefined;
+  filming.recording = recording;
   if (recording) await sleep(1000);
   // A counter's snapshot is taken somewhere inside its adb call: time it at the call's midpoint.
   const resetAt = Date.now();
@@ -312,9 +323,23 @@ export async function runOnce(ctx: RunContext): Promise<RunResult> {
     alerts: ctx.bench.alerts,
   };
   const launchCase = caseKind(ctx.case) === 'launch';
-  const { recording, action } = launchCase
-    ? await launchRun(ctx, state, values, refused)
-    : await windowRun(ctx, state, values, refused);
+  // A run that fails mid-recording still stops its recorder: the next run must not be measured beside it.
+  const filming: { recording?: Recording } = {};
+  let outcome: Filmed;
+  try {
+    outcome = launchCase
+      ? await launchRun(ctx, state, values, refused, filming)
+      : await windowRun(ctx, state, values, refused, filming);
+  } catch (error) {
+    if (filming.recording)
+      await filming.recording.stop().catch((stopError: unknown) => {
+        throw new RecorderStuck(
+          `the run failed (${error instanceof Error ? error.message : String(error)}) and its recording could not be stopped: ${stopError instanceof Error ? stopError.message : String(stopError)}`,
+        );
+      });
+    throw error;
+  }
+  const { recording, action } = outcome;
   const video = recording ? await analyseVideo(recording, values, refused, ctx.bench, ctx.case, action) : undefined;
   return { values, refused, video };
 }

@@ -130,6 +130,8 @@ doubletake status
 doubletake mcp                                      # the same commands as MCP tools (stdio)
 ```
 
+A `check` records a case that fails (its error, refused on the primary) and goes on with the next, saving after every case.
+
 Exit codes: 0 done, 1 error, 4 a primary or a whole case was refused (a busy host refuses that case; the next case still runs), 5 not every primary decided, 6 a primary got worse (with `--fail-on-regression`).
 
 - `<app>` is a `.app` built for the simulator, an `.apk`, or `installed:<bundle id>`.
