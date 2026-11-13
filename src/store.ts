@@ -3,6 +3,7 @@ import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promise
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { Platform } from './metrics.ts';
+import type { ProbeDetail } from './probe.ts';
 import type { Comparison } from './stats.ts';
 import { sleep } from './sh.ts';
 import { isRecord } from './util.ts';
@@ -25,12 +26,14 @@ export type Series = {
   refused: Record<string, string>;
   /** The metrics the case declared (primary and metrics): the only refusals reports list. */
   declared?: string[];
+  /** Each side's typical window from the app's probe (the run with the median renders). */
+  probe?: { base?: ProbeDetail; head?: ProbeDetail };
   pairs: number;
   stopped: string;
   minutes: number;
 };
 
-type Check = { case: string; values: Record<string, number>; refused: Record<string, string> };
+type Check = { case: string; values: Record<string, number>; refused: Record<string, string>; probe?: ProbeDetail };
 
 /** A strobe-shaped experiment record: `id`, `kind`, `created`, `variants`, `series[].primary` match result.v1.json. */
 export type Experiment = {

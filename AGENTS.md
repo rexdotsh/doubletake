@@ -29,6 +29,7 @@ src/run.ts       one run of a case on a device, to metric values
 src/experiment.ts  blocks, pairs, order, stopping
 src/stats.ts     paired differences, bootstrap interval, signed-rank p, verdicts, pairs needed
 src/report.ts    terminal text, markdown and the PR card
+src/probe.ts     the app probe's counts per window (renders, requests); cdp.ts and bridge.ts are its transports
 src/remote.ts    --host: ship the CLI and artifacts over SSH, run there, fetch the result
 sdk/             the in-app SDK (zero dependencies, runs in Hermes)
 skill/           the agent skill

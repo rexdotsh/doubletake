@@ -6,6 +6,8 @@ import { pct } from './bench.ts';
 import type { Device } from './device.ts';
 import { Refusal } from './device.ts';
 import { isCount, metricInfo } from './metrics.ts';
+import { openProbe } from './adapter.ts';
+import { PROBE_METRICS, type ProbeDetail, typical } from './probe.ts';
 import { addByProgram, coresBetween, type Others, snapshot, summarize, watchOthers } from './host.ts';
 import { RecorderStuck, type RunResult, filmed, runOnce } from './run.ts';
 import { type Comparison, LOOKS, MIN_PAIRS, POCOCK_LEVEL, compare, median } from './stats.ts';
@@ -41,7 +43,13 @@ function caseOf(bench: Bench, name: string): Case {
 }
 
 /** A block's median per metric; `varying` names counts whose runs disagreed (never compared exactly). */
-type Block = { values: Record<string, number>; refused: Record<string, string>; varying: Set<string> };
+type Block = {
+  values: Record<string, number>;
+  refused: Record<string, string>;
+  varying: Set<string>;
+  /** The app probe's detail of each measured run. */
+  probes: ProbeDetail[];
+};
 
 const DEFAULT_BOUND = 0.02;
 
@@ -149,6 +157,8 @@ async function block(o: BenchOptions, name: string, c: Case, v: Variant, tag: st
 async function measureBlock(o: BenchOptions, name: string, c: Case, v: Variant, tag: string): Promise<Block> {
   const tap = await o.device.logs(v.appId);
   const offset = await o.device.clockOffset();
+  const probed = [c.primary, ...(c.metrics ?? [])].some((m) => PROBE_METRICS.includes(m));
+  const probe = probed && o.bench.probe ? openProbe(o.bench.probe, o.device, v.appId) : undefined;
   const runs: RunResult[] = [];
   try {
     const total = o.warmup + (c.runs ?? o.runs ?? o.bench.runs ?? 3);
@@ -166,6 +176,7 @@ async function measureBlock(o: BenchOptions, name: string, c: Case, v: Variant, 
         offset,
         dir: dirname(o.file),
         video,
+        probe,
       });
       await appendFile(
         join(o.dir, 'runs.ndjson'),
@@ -174,6 +185,7 @@ async function measureBlock(o: BenchOptions, name: string, c: Case, v: Variant, 
       if (i >= o.warmup) runs.push(result);
     }
   } finally {
+    await probe?.stop();
     await tap.stop();
     await o.device.terminate(v.appId);
   }
@@ -190,7 +202,7 @@ async function measureBlock(o: BenchOptions, name: string, c: Case, v: Variant, 
         runs.map((r) => r.refused[metric]).find(Boolean) ??
         `missing in ${runs.length - got.length} of ${runs.length} runs`;
   }
-  return { values, refused, varying };
+  return { values, refused, varying, probes: runs.flatMap((r) => (r.probe ? [r.probe] : [])) };
 }
 
 function comparisonOf(
@@ -296,6 +308,7 @@ async function series(o: BenchOptions, name: string): Promise<Series> {
     secondaries,
     refused,
     declared: [c.primary, ...(c.metrics ?? [])],
+    ...probeOf(pairs),
     pairs: pairs.length,
     stopped: primary.decided
       ? stopped
@@ -304,6 +317,13 @@ async function series(o: BenchOptions, name: string): Promise<Series> {
         : stopped,
     minutes: (Date.now() - started) / 60_000,
   };
+}
+
+/** Each side's typical probe detail, when the case read the app's probe. */
+function probeOf(pairs: [Block, Block][]): { probe?: { base?: ProbeDetail; head?: ProbeDetail } } {
+  const base = typical(pairs.flatMap(([b]) => b.probes));
+  const head = typical(pairs.flatMap(([, h]) => h.probes));
+  return base || head ? { probe: { base, head } } : {};
 }
 
 function fmt(v: number | undefined): string {
@@ -395,10 +415,9 @@ export async function runCheck(o: Omit<BenchOptions, 'base' | 'pairs' | 'warmup'
  * recorded (refused on its primary, with the error) and the next case still runs, unless its recorder could not be
  * stopped.
  */
-export async function checkCase(
-  primary: string,
-  measure: () => Promise<{ values: Record<string, number>; refused: Record<string, string> }>,
-): Promise<{ values: Record<string, number>; refused: Record<string, string> }> {
+type Checked = { values: Record<string, number>; refused: Record<string, string>; probes?: ProbeDetail[] };
+
+export async function checkCase(primary: string, measure: () => Promise<Checked>): Promise<Checked> {
   try {
     return await measure();
   } catch (error) {
@@ -428,7 +447,12 @@ async function check(o: Omit<BenchOptions, 'base' | 'pairs' | 'warmup'>): Promis
         );
       return result;
     });
-    o.experiment.checks.push({ case: name, values: b.values, refused: b.refused });
+    o.experiment.checks.push({
+      case: name,
+      values: b.values,
+      refused: b.refused,
+      ...(b.probes?.[0] && { probe: b.probes[0] }),
+    });
     o.log(
       `${name}: ${Object.keys(b.refused).includes(c.primary) ? `refused: ${b.refused[c.primary]}` : `${c.primary} ${fmt(b.values[c.primary])}`}`,
     );
