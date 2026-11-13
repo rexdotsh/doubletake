@@ -154,6 +154,31 @@ test('an indexed source map looks up inside the right section', () => {
   expect(map.lookup(7, 9)).toEqual({ source: 'b.js', line: 7, column: 0, name: undefined });
 });
 
+test('a one-field segment ends the mapped range before it', () => {
+  // AAAA maps column 0 to a.js; U (column 10) starts unmapped code; column 20 maps again.
+  const map = sourceMap({ version: 3, sources: ['a.js'], names: [], mappings: `AAAA,U,${enc(10, 0, 4, 0)}` });
+  expect(map.lookup(1, 5)?.source).toBe('a.js');
+  expect(map.lookup(1, 15)).toBeUndefined();
+  expect(map.lookup(1, 25)).toMatchObject({ source: 'a.js', line: 5 });
+});
+
+test('sections nested in a section look up through both offsets', () => {
+  const inner = { version: 3, sources: ['c.js'], names: [], mappings: `;${enc(0, 0, 2, 0)}` };
+  const map = sourceMap({
+    version: 3,
+    sections: [
+      { offset: { line: 0, column: 0 }, map: { version: 3, sources: ['a.js'], names: [], mappings: enc(0, 0, 0, 0) } },
+      {
+        offset: { line: 10, column: 0 },
+        map: { version: 3, sections: [{ offset: { line: 2, column: 0 }, map: inner }] },
+      },
+    ],
+  });
+  expect(map.sources).toEqual(['a.js', 'c.js']);
+  expect(map.lookup(14, 3)).toMatchObject({ source: 'c.js', line: 3 });
+  expect(map.lookup(12, 0)).toBeUndefined();
+});
+
 test('R8 mapping names obfuscated classes and methods back', () => {
   const r8 = parseR8(
     [

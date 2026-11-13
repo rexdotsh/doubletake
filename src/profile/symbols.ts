@@ -28,7 +28,11 @@ function plain(map: Record<string, unknown>): { lookup: Lookup; sources: string[
       if (!segment) continue;
       const f = vlq(segment);
       column += f[0] ?? 0;
-      if (f.length < 4) continue;
+      // A one-field segment starts generated code with no original: positions in it map to nothing.
+      if (f.length < 4) {
+        out.push(column, -1, 0, 0, -1);
+        continue;
+      }
       source += f[1] ?? 0;
       oLine += f[2] ?? 0;
       oColumn += f[3] ?? 0;
@@ -66,8 +70,8 @@ function plain(map: Record<string, unknown>): { lookup: Lookup; sources: string[
     }
     if (lo === 0) return undefined;
     const at = (lo - 1) * 5;
-    const [src, l, c, n] = [seg[at + 1] ?? 0, (seg[at + 2] ?? 0) + 1, seg[at + 3] ?? 0, seg[at + 4] ?? -1];
-    const s = sources[src];
+    const [src, l, c, n] = [seg[at + 1] ?? -1, (seg[at + 2] ?? 0) + 1, seg[at + 3] ?? 0, seg[at + 4] ?? -1];
+    const s = src < 0 ? undefined : sources[src];
     if (s === undefined) return undefined;
     return { source: s, line: l, column: c, name: enclosing(src, l, c) ?? (n >= 0 ? names[n] : undefined) };
   };
@@ -110,7 +114,7 @@ export function sourceMap(json: unknown): SourceMap {
     const column = dig(s, 'offset', 'column');
     const map = dig(s, 'map');
     return typeof line === 'number' && typeof column === 'number' && isRecord(map)
-      ? [{ line, column, ...plain(map) }]
+      ? [{ line, column, ...sourceMap(map) }]
       : [];
   });
   return {
