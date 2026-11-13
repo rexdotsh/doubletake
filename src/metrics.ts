@@ -1,5 +1,5 @@
 export type Better = 'lower' | 'higher';
-type Unit = 'ms' | 'MiB' | 'count' | 'bytes' | '%' | 'ms/s';
+type Unit = 'ms' | 'MiB' | 'count' | 'bytes' | '%' | 'ms/s' | 'fps';
 export type Platform = 'ios' | 'android';
 
 export type MetricInfo = {
@@ -63,6 +63,46 @@ export const METRICS: Record<string, MetricInfo> = {
     unit: 'MiB',
     better: 'lower',
     source: 'iOS: physical footprint; Android: PSS from `dumpsys meminfo`, at the end of the run',
+    platforms: both,
+  },
+  'memory.growth': {
+    unit: 'MiB',
+    better: 'lower',
+    source:
+      'iOS: physical footprint; Android: PSS from `dumpsys meminfo`, at the end of the window minus at its start (repeat a round trip to find leaks)',
+    platforms: both,
+  },
+  'frames.idle': {
+    unit: 'fps',
+    better: 'lower',
+    source: '`dumpsys gfxinfo`: frames the app drew per second while it sat untouched (something animating at rest)',
+    platforms: ['android'],
+  },
+  'frames.long': {
+    unit: 'count',
+    better: 'lower',
+    source: '`dumpsys gfxinfo` histogram: frames that took 100 ms or more (a visible stall)',
+    platforms: ['android'],
+  },
+  'visual.flashes': {
+    unit: 'count',
+    better: 'lower',
+    source:
+      'screen recording: the near-white (or near-black) share of the frame (or an edge strip, filling it) rising by 25 points and falling back within 300 ms',
+    platforms: both,
+  },
+  'visual.freeze': {
+    unit: 'ms',
+    better: 'lower',
+    source:
+      'screen recording: the longest the screen held still between its first change and visually complete (refused when it never held still for 500 ms at the end)',
+    platforms: both,
+  },
+  'visual.jumps': {
+    unit: 'count',
+    better: 'lower',
+    source:
+      'screen recording: changes after the screen had held still for 300 ms, before visually complete (layout shifts, late content)',
     platforms: both,
   },
   'frames.total': {

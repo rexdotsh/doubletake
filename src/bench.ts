@@ -16,7 +16,8 @@ export type Step =
   | { swipe: { from: Point; to: Point; duration?: string } }
   | { scroll: 'down' | 'up'; times?: number }
   | { maestro: string; env?: Record<string, string> }
-  | { shell: string };
+  | { shell: string }
+  | { repeat: Step[]; times: number };
 
 export type Case = {
   /** The metric the verdict is about. */
@@ -56,6 +57,11 @@ export type Bench = {
 };
 
 export type CaseKind = 'launch' | 'run' | 'idle';
+
+/** Every step, the ones inside repeats included. */
+export function allSteps(flow: readonly Step[]): Step[] {
+  return flow.flatMap((s) => (typeof s === 'object' && 'repeat' in s ? allSteps(s.repeat) : [s]));
+}
 
 export function caseKind(c: Case): CaseKind {
   if (c.launch) return 'launch';
@@ -205,8 +211,14 @@ function parseStep(value: unknown, where: string): Step {
     return { maestro: string(s.maestro, where), env };
   }
   if ('shell' in s) return (keys(s, ['shell'], where), { shell: string(s.shell, where) });
+  if ('repeat' in s) {
+    keys(s, ['repeat', 'times'], where);
+    const body = steps(s.repeat, `${where}.repeat`);
+    if (!body.length) throw new Error(`${where}.repeat: at least one step`);
+    return { repeat: body, times: count(s.times, `${where}.times`) };
+  }
   throw new Error(
-    `${where}: a step is "launch", "terminate" or one of open, wait, sleep, tap, swipe, scroll, maestro, shell`,
+    `${where}: a step is "launch", "terminate" or one of open, wait, sleep, tap, swipe, scroll, maestro, shell, repeat`,
   );
 }
 

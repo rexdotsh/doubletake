@@ -153,7 +153,9 @@ async function measureBlock(o: BenchOptions, name: string, c: Case, v: Variant, 
   try {
     const total = o.warmup + (c.runs ?? o.runs ?? o.bench.runs ?? 3);
     for (let i = 0; i < total; i++) {
-      const video = filmed(c) ? join(o.dir, 'video', `${tag}-${v.role}-${i}.mp4`) : undefined;
+      // A check films every case under one tag: the case's place in the run keeps their videos apart.
+      const clip = tag === 'check' ? `${tag}-${o.cases.indexOf(name)}-${name.replace(/[^\w-]+/g, '_')}` : tag;
+      const video = filmed(c) ? join(o.dir, 'video', `${clip}-${v.role}-${i}.mp4`) : undefined;
       if (video) await mkdir(dirname(video), { recursive: true });
       const result = await runOnce({
         device: o.device,

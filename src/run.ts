@@ -5,7 +5,7 @@ import { Refusal } from './device.ts';
 import { countersIn, marksIn, ofProcess } from './events.ts';
 import { type FlowState, launch, runSteps } from './flow.ts';
 import { sleep } from './sh.ts';
-import { type Region, VIDEO_FPS, decodeFrames, visualTimes } from './visual.ts';
+import { type Region, type Transition, VIDEO_FPS, decodeFrames, transition, visualTimes } from './visual.ts';
 
 type RunValues = Record<string, number>;
 /** A run's recording, if filmed, and when its action began (host clock). */
@@ -16,7 +16,8 @@ export type RunResult = {
   values: RunValues;
   /** Metrics the run could not give, with the reason. */
   refused: Record<string, string>;
-  video?: { file: string; first: number; seconds: number };
+  /** `events`: the flashes and jumps a transition metric found, ms from the start of the video. */
+  video?: { file: string; first: number; seconds: number; events?: Transition['events'] };
 };
 
 export type RunContext = {
@@ -35,11 +36,24 @@ export type RunContext = {
 const DRAIN_MS = 300;
 const FRAME_METRICS = ['js.frames.dropped', 'js.stall'];
 const NETWORK_METRICS = ['net.requests', 'net.bytes'];
-const UI_FRAME_METRICS = ['frames.total', 'frames.janky', 'frames.janky.pct', 'frames.p90'];
+const UI_FRAME_METRICS = [
+  'frames.total',
+  'frames.idle',
+  'frames.long',
+  'frames.janky',
+  'frames.janky.pct',
+  'frames.p90',
+];
 
-/** A visual primary needs a recording of every run; so does a run asked to be filmed. */
+const VISUAL = ['launch.visual', 'visual.flashes', 'visual.freeze', 'visual.jumps'];
+const TRANSITION_METRICS = ['visual.flashes', 'visual.freeze', 'visual.jumps'];
+
+const declares = (c: Case, metrics: readonly string[]) =>
+  [c.primary, ...(c.metrics ?? [])].some((m) => metrics.includes(m));
+
+/** A visual metric needs a recording of every run; so does a run asked to be filmed. */
 export function filmed(c: Case): boolean {
-  return c.primary === 'launch.visual' || (c.metrics ?? []).includes('launch.visual') || c.launch?.visual === true;
+  return declares(c, VISUAL) || c.launch?.visual === true;
 }
 
 function refuse(refused: Record<string, string>, metrics: readonly string[], why: string): void {
@@ -91,12 +105,38 @@ async function analyseVideo(
   values: RunValues,
   refused: Record<string, string>,
   bench: Bench,
-  launchCase: boolean,
+  c: Case,
   action: number,
 ): Promise<RunResult['video']> {
+  const launchCase = caseKind(c) === 'launch';
   const file = await recording.stop();
   const frames = await decodeFrames(file);
   const seconds = frames.length / VIDEO_FPS;
+  let events: Transition['events'] | undefined;
+  if (declares(c, TRANSITION_METRICS)) {
+    // Without a video clock the clip starts a second before the action, so all of it is the transition.
+    const from =
+      recording.startedAt === undefined ? 0 : Math.round(((action - recording.startedAt) * VIDEO_FPS) / 1000);
+    try {
+      const t = transition(frames.slice(Math.max(0, from)), bench.ignore);
+      values['visual.flashes'] = t.flashes;
+      if (t.settled) {
+        values['visual.freeze'] = t.freeze;
+        values['visual.jumps'] = t.jumps;
+      } else
+        refuse(
+          refused,
+          ['visual.freeze', 'visual.jumps'],
+          'NotSettled: the screen was still changing when the recording ended: hold longer, or ignore the animating region',
+        );
+      const offset = (Math.max(0, from) * 1000) / VIDEO_FPS;
+      for (const e of t.events) e.at += offset;
+      events = t.events;
+    } catch (error) {
+      if (!(error instanceof Refusal)) throw error;
+      refuse(refused, TRANSITION_METRICS, `${error.validator}: ${error.message}`);
+    }
+  }
   if (recording.startedAt === undefined) {
     // No exact clock for the video's first frame (Android's screenrecord): time from the first change, once the
     // recorder's approximate start shows that change is the launch's (clockless).
@@ -104,7 +144,7 @@ async function analyseVideo(
     const { first, visual, refusal } = clockless(frames, bench.ignore, launchCase, launchAt);
     if (launchCase && visual !== undefined) values['launch.visual'] = visual;
     if (launchCase && refusal) refused['launch.visual'] = refusal;
-    return { file, first, seconds };
+    return { file, first, seconds, events };
   }
   const at = Math.max(0, action - recording.startedAt);
   try {
@@ -114,7 +154,7 @@ async function analyseVideo(
     if (!(error instanceof Refusal)) throw error;
     if (launchCase) refused['launch.visual'] = `${error.validator}: ${error.message}`;
   }
-  return { file, first: at / 1000, seconds };
+  return { file, first: at / 1000, seconds, events };
 }
 
 /** How much earlier than the recorder's start says a launch's first change may show: its encoder start-up. */
@@ -189,6 +229,7 @@ async function launchRun(
   await addMemory(values, ctx, launched.pid);
   addSdk(values, refused, ctx, { from: start, to: end, launched: start, pid: launched.pid });
   refuse(refused, UI_FRAME_METRICS, 'NotForCase: UI frame counts are for run cases');
+  if (declares(c, ['memory.growth'])) refused['memory.growth'] = 'NotForCase: memory growth is for run and idle cases';
   return { recording, action: launched.t0 };
 }
 
@@ -205,9 +246,13 @@ async function windowRun(
   if (!state.launched) await launch(state);
   const pid = state.launched?.pid ?? 0;
   if (c.run) await device.prepareInput?.();
-  await device.frames?.reset(appId);
+  const memoryBefore = declares(c, ['memory.growth']) ? (await device.memory(pid, appId)).endMiB : undefined;
   const recording = ctx.video ? await device.record(ctx.video) : undefined;
   if (recording) await sleep(1000);
+  // A counter's snapshot is taken somewhere inside its adb call: time it at the call's midpoint.
+  const resetAt = Date.now();
+  await device.frames?.reset(appId);
+  const framesFrom = (resetAt + Date.now()) / 2;
   const cpuBefore = await device.cpuMs(pid);
   const start = Date.now();
   state.since = start + ctx.offset;
@@ -216,15 +261,27 @@ async function windowRun(
   const end = Date.now();
   const cpu = (await device.cpuMs(pid)) - cpuBefore;
   // Frame counters keep counting: read them at the window's end, before the padding, drain and memory.
+  const readAt = Date.now();
   const frames = await device.frames?.read(appId);
+  const framesTo = (readAt + Date.now()) / 2;
   values['cpu.time'] = cpu;
   if (c.idle) values['cpu.idle'] = cpu / ((end - start) / 1000);
   else values['run.duration'] = end - start;
   if (recording) await sleep(1000);
   await sleep(DRAIN_MS);
   await addMemory(values, ctx, pid);
+  if (declares(c, ['memory.growth'])) {
+    const after = values['memory.end'];
+    if (memoryBefore === undefined || after === undefined)
+      refused['memory.growth'] = 'NoMemory: the platform gave no current memory reading';
+    else values['memory.growth'] = after - memoryBefore;
+  }
   if (frames) {
     values['frames.total'] = frames.total;
+    if (c.idle) values['frames.idle'] = frames.total / ((framesTo - framesFrom) / 1000);
+    else refused['frames.idle'] = 'NotForCase: frames at rest are for idle cases';
+    if (frames.long === undefined) refused['frames.long'] = 'NoHistogram: gfxinfo printed no frame-time histogram';
+    else values['frames.long'] = frames.long;
     values['frames.janky'] = frames.janky;
     if (frames.total > 0) values['frames.janky.pct'] = (100 * frames.janky) / frames.total;
     else refused['frames.janky.pct'] = 'NoFrames: the app rendered no frames in the run';
@@ -258,6 +315,6 @@ export async function runOnce(ctx: RunContext): Promise<RunResult> {
   const { recording, action } = launchCase
     ? await launchRun(ctx, state, values, refused)
     : await windowRun(ctx, state, values, refused);
-  const video = recording ? await analyseVideo(recording, values, refused, ctx.bench, launchCase, action) : undefined;
+  const video = recording ? await analyseVideo(recording, values, refused, ctx.bench, ctx.case, action) : undefined;
   return { values, refused, video };
 }

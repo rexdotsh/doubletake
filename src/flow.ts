@@ -77,6 +77,7 @@ export async function runSteps(steps: readonly Step[], state: FlowState): Promis
     } else if ('sleep' in step) await sleep(ms(step.sleep));
     else if ('maestro' in step) await act(() => maestro(state.device.id, resolve(state.dir, step.maestro), step.env));
     else if ('shell' in step) await act(() => run('sh', ['-c', step.shell], { cwd: state.dir }));
+    else if ('repeat' in step) for (let i = 0; i < step.times; i++) await runSteps(step.repeat, state);
   }
   await flush();
 }
