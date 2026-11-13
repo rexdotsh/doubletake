@@ -45,7 +45,7 @@ const USAGE = `doubletake ${pkg.version}: A/B performance for React Native apps 
   --fail-on-regression    exit 6 when a primary is worse (CI)
   --json                  print the experiment record
 
-  exit codes: 0 done · 1 error · 4 a primary was refused · 5 not every primary decided · 6 regression
+  exit codes: 0 done · 1 error · 4 a primary or a case was refused · 5 not every primary decided · 6 regression
 `;
 
 type Flags = {
@@ -284,7 +284,8 @@ async function measure(command: 'bench' | 'check', file: string | undefined, fla
       ? await runBench({ ...common, base, pairs, warmup, video: flags.video })
       : await runCheck(common);
   out(flags.json ? JSON.stringify(done, null, 2) : summary(done));
-  if (done.checks.some((c) => c.refused[loaded.cases[c.case]?.primary ?? ''])) process.exitCode = 4;
+  if (done.checks.some((c) => c.refused[loaded.cases[c.case]?.primary ?? '']) || done.refused_cases?.length)
+    process.exitCode = 4;
   else if (flags['fail-on-regression'] && done.series.some((s) => s.primary.verdict_kind === 'worse'))
     process.exitCode = 6;
   else if (command === 'bench' && !done.decided) process.exitCode = 5;

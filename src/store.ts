@@ -52,6 +52,8 @@ export type Experiment = {
   };
   decided: boolean;
   series: Series[];
+  /** Cases refused as a whole (a busy host): the experiment went on with the next case. */
+  refused_cases?: { case: string; validator: string; message: string }[];
   checks: Check[];
   warnings: string[];
   video?: string;

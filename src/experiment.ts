@@ -343,11 +343,17 @@ async function benchLocked(o: BenchOptions): Promise<Experiment> {
   await o.device.prepare();
   if (o.base.appId !== o.head.appId) await Promise.all([install(o, o.base), install(o, o.head)].map((p) => p));
   for (const name of o.cases) {
-    const result = await series(o, name);
-    o.experiment.series.push(result);
+    try {
+      o.experiment.series.push(await series(o, name));
+    } catch (error) {
+      // A refusal (a busy host) costs this case, not the ones after it: they get their own blocks and guard.
+      if (!(error instanceof Refusal)) throw error;
+      o.log(`${name}: refused (${error.validator}): ${error.message}`);
+      (o.experiment.refused_cases ??= []).push({ case: name, validator: error.validator, message: error.message });
+    }
     await saveExperiment(o.dir, o.experiment);
   }
-  o.experiment.decided = o.experiment.series.every((s) => s.primary.decided);
+  o.experiment.decided = !o.experiment.refused_cases?.length && o.experiment.series.every((s) => s.primary.decided);
   if (o.video) {
     o.log(`${o.video}: filming one block per side`);
     o.experiment.video = await film(o, o.video);
