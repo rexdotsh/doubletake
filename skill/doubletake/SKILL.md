@@ -53,7 +53,7 @@ export default {
 
 ## Where does startup time go?
 
-Give a launch case `timeline: true`. The platform's lines (`process.start`, `js.run`, `first.frame`, `fully.drawn`) and the app's marks become `mark.<name>` metrics, and the gaps between consecutive marks become `phase.<from>-><to>` metrics, compared like any other. Apps mark their start without the SDK by logging `[perf-mark] <name> <Date.now()>` (README: the marks protocol). `doubletake timeline latest` prints each launch, the median waterfall per side and each phase's A/B, and writes an SVG per case. A mark a launch did not write is reported missing, never filled in.
+Give a launch case `timeline: true`. The platform's lines (`rn.start`, `js.load`, `js.run`, `first.frame`, `splash.removed`, `fully.drawn`; most on Android) and the app's marks become `mark.<name>` metrics, and the gaps between consecutive marks become `phase.<from>-><to>` metrics, compared like any other. Apps mark their start without the SDK by logging `[perf-mark] <name> <Date.now()>` (README: the marks protocol). `doubletake timeline latest` prints each launch, the median waterfall per side and each phase's A/B, and writes an SVG per case. A mark a launch did not write is reported missing, never filled in.
 
 ## Limits
 

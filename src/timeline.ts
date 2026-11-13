@@ -1,7 +1,7 @@
 import type { SdkEvent } from './events.ts';
 import { median } from './stats.ts';
 
-// A launch's timeline: the platform's own log lines (the process starts, JS runs, the first frame) and the
+// A launch's timeline: the platform's own log lines (React Native starts, JS runs, the first frame) and the
 // app's marks, each timed from the launch. A phase is the gap between two consecutive marks, in the order
 // they happened in that launch; a mark a launch did not write is missing there, never filled in.
 
@@ -9,7 +9,7 @@ import { median } from './stats.ts';
 const ORIGIN = 'start';
 
 type Mark = Extract<SdkEvent, { kind: 'mark' }>;
-type OsMark = 'process.start' | 'rn.start' | 'js.load' | 'js.run' | 'first.frame' | 'splash.removed' | 'fully.drawn';
+type OsMark = 'rn.start' | 'js.load' | 'js.run' | 'first.frame' | 'splash.removed' | 'fully.drawn';
 const os = (name: OsMark, t: number, pid?: number): Mark => ({
   kind: 'mark',
   t,
@@ -27,16 +27,13 @@ export function logcatLine(line: string): { t: number; pid: number; tag: string;
 
 /**
  * The Android system's and React Native's lines that mark a launch of `pkg`, timed by logcat. The system's
- * lines are written by system_server: they carry the app's pid only where the message names it.
+ * lines are written by system_server, so they carry no app pid. No process-start mark: ActivityManager logs
+ * the fork within a few ms of the intent, as often before it as after, so the timeline starts at the intent.
  */
 export function androidMark(line: string, pkg: string): Mark | null {
   const l = logcatLine(line);
   if (!l) return null;
   const { t, tag, message } = l;
-  if (tag === 'ActivityManager') {
-    const start = /^Start proc (\d+):([\w.]+)\//.exec(message);
-    return start?.[2] === pkg ? os('process.start', t, Number(start[1])) : null;
-  }
   if (tag === 'ActivityTaskManager' && message.includes(` ${pkg}/`)) {
     if (message.startsWith('Displayed ')) return os('first.frame', t);
     if (message.startsWith('Fully drawn ')) return os('fully.drawn', t);

@@ -131,7 +131,20 @@ export function timelineText(t: CaseTimeline, platform: string): string {
   return lines.join('\n').trimEnd();
 }
 
-const COLORS = ['#4e79a7', '#f28e2b', '#59a14f', '#e15759', '#76b7b2', '#edc948', '#b07aa1', '#ff9da7', '#9c755f'];
+const COLORS = [
+  '#4e79a7',
+  '#f28e2b',
+  '#59a14f',
+  '#e15759',
+  '#76b7b2',
+  '#edc948',
+  '#b07aa1',
+  '#ff9da7',
+  '#9c755f',
+  '#bab0ac',
+  '#1f3b73',
+  '#8cd17d',
+];
 const SIDE_COLORS = { base: '#8c8c8c', head: '#2f6fd6' } as const;
 const esc = (s: string) => s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 
@@ -162,7 +175,11 @@ export function timelineSvg(t: CaseTimeline): string {
   y += 20;
   const top = y;
   for (const r of rows) {
-    out.push(`<text x="10" y="${y + 6 * t.sides.length + 4}">${esc(`${r.from} → ${r.to}`)}</text>`);
+    // The swatch is the phase's colour in the launch strips below.
+    out.push(
+      `<rect x="10" y="${y + 6 * t.sides.length - 6}" width="10" height="10" fill="${colorOf.get(r.to) ?? '#bbb'}"/>`,
+      `<text x="26" y="${y + 6 * t.sides.length + 4}">${esc(`${r.from} → ${r.to}`)}</text>`,
+    );
     for (const s of t.sides) {
       const p = s.waterfall.phases.find((q) => q.from === r.from && q.to === r.to);
       if (p) {

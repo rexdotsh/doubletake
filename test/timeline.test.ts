@@ -29,7 +29,6 @@ test('android: the platform marks a launch of the app, and app marks keep their 
   const lines = LOGCAT.trim().split('\n');
   const marks = lines.map((l) => androidMark(l, pkg)).filter((m) => m !== null);
   expect(marks.map((m) => [m.name, m.t, m.pid])).toEqual([
-    ['process.start', 1_763_030_400_131, 4242],
     ['rn.start', 1_763_030_400_443, 4242],
     ['js.load', 1_763_030_400_535, 4242],
     ['js.run', 1_763_030_401_300, 4242],
@@ -106,7 +105,7 @@ test('timeline cases and phase metrics validate', () => {
     },
   });
   expect(bench.cases.cold?.launch?.timeline).toBe(true);
-  expect(metricInfo('phase.start->process.start')?.unit).toBe('ms');
+  expect(metricInfo('phase.start->rn.start')?.unit).toBe('ms');
   expect(metricInfo('phase.nope')).toBeUndefined();
   expect(() => validate({ cases: { c: { launch: { timeline: 'yes' }, primary: 'cpu.time' } } })).toThrow(
     'true or false',
