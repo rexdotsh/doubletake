@@ -1,7 +1,7 @@
 import type { Better } from './metrics.ts';
 import { get } from './util.ts';
 
-type VerdictKind = 'better' | 'worse' | 'same' | 'unclear' | 'underpowered' | 'untested';
+type VerdictKind = 'better' | 'worse' | 'same' | 'noise' | 'unclear' | 'underpowered' | 'untested';
 
 export type Comparison = {
   metric: string;
@@ -19,6 +19,8 @@ export type Comparison = {
   p: number;
   /** The equivalence bound, in the same scale as the estimate. */
   bound: number;
+  /** The case's noise floor (relative): a change this small is `noise`, whatever its interval says. */
+  floor?: number;
   better: Better;
   verdict_kind: VerdictKind;
   decided: boolean;
@@ -172,6 +174,8 @@ export type CompareOptions = {
   count: boolean;
   level: number;
   bound: number;
+  /** Relative: a decided direction smaller than this, or an interval inside ±floor, is `noise`. */
+  floor?: number;
   seed?: number;
 };
 
@@ -250,6 +254,18 @@ export function compare(base: readonly number[], head: readonly number[], o: Com
   else if (lo > 0 && significant) kind = sign > 0 ? 'worse' : 'better';
   else if ((lo > -boundScaled && hi < boundScaled) || (lo === 0 && hi === 0)) kind = 'same';
   else if (needed === null || needed > n) kind = 'underpowered';
-  const decided = kind === 'better' || kind === 'worse' || kind === 'same';
-  return { ...common, ...interval, verdict_kind: kind, decided, needed_pairs: needed };
+  // A floor measured by an A/A run: the build pipeline and device move a metric this much with no code change.
+  if (o.floor !== undefined && ratio && kind !== 'same') {
+    const f = Math.log1p(o.floor);
+    if (kind === 'better' || kind === 'worse' ? Math.abs(mean(d)) < f : lo > -f && hi < f) kind = 'noise';
+  }
+  const decided = kind === 'better' || kind === 'worse' || kind === 'same' || kind === 'noise';
+  return {
+    ...common,
+    ...interval,
+    ...(o.floor !== undefined && ratio && { floor: o.floor }),
+    verdict_kind: kind,
+    decided,
+    needed_pairs: needed,
+  };
 }

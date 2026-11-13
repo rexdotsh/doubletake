@@ -118,3 +118,31 @@ test('eight identical zero pairs are the same, not unclear', () => {
   const c = compare([0, 0, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, 0], { ...opts, metric: 'js.stall', ratio: false });
   expect(c.verdict_kind).toBe('same');
 });
+
+test('a decided change under the noise floor reads noise', () => {
+  // A/A on an emulator: two builds of the same bundle, cold-start CPU, 8 pairs.
+  const base = [7720, 7870, 7960, 7830, 7820, 7940, 7800, 7980];
+  const head = [8150, 8170, 8040, 8080, 7960, 7940, 7880, 8160];
+  const o = {
+    metric: 'cpu.time',
+    better: 'lower' as const,
+    ratio: true,
+    count: false,
+    level: 0.95,
+    bound: 0.02,
+    seed: 1,
+  };
+  expect(compare(base, head, o).verdict_kind).toBe('worse');
+  const floored = compare(base, head, { ...o, floor: 0.04 });
+  expect(floored.verdict_kind).toBe('noise');
+  expect(floored.decided).toBe(true);
+  expect(floored.floor).toBe(0.04);
+  // A real 10% change still reads as one.
+  expect(
+    compare(
+      base,
+      base.map((b) => b * 1.1),
+      { ...o, floor: 0.04 },
+    ).verdict_kind,
+  ).toBe('worse');
+});

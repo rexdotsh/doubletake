@@ -35,6 +35,11 @@ export type Case = {
   runs?: number;
   /** Equivalence bound for `same`, as a percentage. */
   bound?: string;
+  /**
+   * Noise floor, as a percentage: what an A/A run (one build against itself, or two builds of the same source)
+   * moved this case's metrics. A change smaller than it reads `within noise`.
+   */
+  floor?: string;
 };
 
 export type Bench = {
@@ -218,7 +223,7 @@ function steps(value: unknown, where: string): Step[] {
 
 function parseCase(value: unknown, where: string): Case {
   const c = object(value, where);
-  keys(c, ['primary', 'metrics', 'launch', 'setup', 'run', 'idle', 'runs', 'bound'], where);
+  keys(c, ['primary', 'metrics', 'launch', 'setup', 'run', 'idle', 'runs', 'bound', 'floor'], where);
   const kinds = ['launch', 'run', 'idle'].filter((k) => c[k] !== undefined);
   if (kinds.length !== 1) throw new Error(`${where}: a case has exactly one of launch, run or idle`);
   let launch: Case['launch'];
@@ -243,6 +248,7 @@ function parseCase(value: unknown, where: string): Case {
     idle: optional(c.idle, (v) => duration(v, `${where}.idle`)),
     runs: optional(c.runs, (v) => count(v, `${where}.runs`)),
     bound: optional(c.bound, (v) => (pct(string(v, `${where}.bound`)), string(v, `${where}.bound`))),
+    floor: optional(c.floor, (v) => (pct(string(v, `${where}.floor`)), string(v, `${where}.floor`))),
   };
 }
 
