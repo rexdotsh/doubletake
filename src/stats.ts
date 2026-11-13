@@ -242,7 +242,9 @@ export function compare(base: readonly number[], head: readonly number[], o: Com
     p,
     bound: ratio ? o.bound : boundScaled,
   };
-  const needed = n >= 2 ? neededPairs(d, boundScaled, o.level) : null;
+  // With a floor, the band an interval must fit (or clear) is the wider of the bound and the floor.
+  const band = o.floor !== undefined && ratio ? Math.max(boundScaled, Math.log1p(o.floor)) : boundScaled;
+  const needed = n >= 2 ? neededPairs(d, band, o.level) : null;
   if (n < MIN_PAIRS)
     return { ...common, ...interval, verdict_kind: 'underpowered', decided: false, needed_pairs: needed };
 
