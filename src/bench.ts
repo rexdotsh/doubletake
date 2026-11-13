@@ -37,7 +37,7 @@ export type Case = {
   bound?: string;
   /**
    * Noise floor, as a percentage: what an A/A run (one build against itself, or two builds of the same source)
-   * moved this case's metrics. A change smaller than it reads `within noise`.
+   * moved this case's metrics. An interval inside ±floor reads `within noise`.
    */
   floor?: string;
 };

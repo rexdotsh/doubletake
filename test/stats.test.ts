@@ -137,6 +137,15 @@ test('a decided change under the noise floor reads noise', () => {
   expect(floored.verdict_kind).toBe('noise');
   expect(floored.decided).toBe(true);
   expect(floored.floor).toBe(0.04);
+  // An estimate under the floor with an interval past it is not settled (Pocock level, as in auto looks).
+  const crossing = compare(Array(8).fill(100), [101, 102, 103, 104, 104, 105, 106, 106], {
+    ...o,
+    level: 0.9842,
+    floor: 0.04,
+  });
+  expect(crossing.hi).toBeGreaterThan(0.04);
+  expect(crossing.verdict_kind).toBe('unclear');
+  expect(crossing.decided).toBe(false);
   // A real 10% change still reads as one.
   expect(
     compare(

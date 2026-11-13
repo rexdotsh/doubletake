@@ -174,7 +174,7 @@ export type CompareOptions = {
   count: boolean;
   level: number;
   bound: number;
-  /** Relative: a decided direction smaller than this, or an interval inside ±floor, is `noise`. */
+  /** Relative: an interval inside ±floor is `noise`; a direction whose estimate is under it is `unclear`. */
   floor?: number;
   seed?: number;
 };
@@ -257,7 +257,10 @@ export function compare(base: readonly number[], head: readonly number[], o: Com
   // A floor measured by an A/A run: the build pipeline and device move a metric this much with no code change.
   if (o.floor !== undefined && ratio && kind !== 'same') {
     const f = Math.log1p(o.floor);
-    if (kind === 'better' || kind === 'worse' ? Math.abs(mean(d)) < f : lo > -f && hi < f) kind = 'noise';
+    // Within noise only when the whole interval is: like `same`, with the floor as the band. A direction whose
+    // estimate is under the floor but whose interval reaches past it is not settled either way: more pairs.
+    if (lo > -f && hi < f) kind = 'noise';
+    else if ((kind === 'better' || kind === 'worse') && Math.abs(mean(d)) < f) kind = 'unclear';
   }
   const decided = kind === 'better' || kind === 'worse' || kind === 'same' || kind === 'noise';
   return {
