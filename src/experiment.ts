@@ -7,7 +7,7 @@ import type { Device } from './device.ts';
 import { Refusal } from './device.ts';
 import { isCount, metricInfo } from './metrics.ts';
 import { addByProgram, coresBetween, type Others, snapshot, summarize, watchOthers } from './host.ts';
-import { type RunResult, filmed, runOnce } from './run.ts';
+import { RecorderStuck, type RunResult, filmed, runOnce } from './run.ts';
 import { type Comparison, LOOKS, MIN_PAIRS, POCOCK_LEVEL, compare, median } from './stats.ts';
 import { type Experiment, type Series, type Variant, lockDevice, saveExperiment } from './store.ts';
 import { sleep } from './sh.ts';
@@ -392,7 +392,8 @@ export async function runCheck(o: Omit<BenchOptions, 'base' | 'pairs' | 'warmup'
 
 /**
  * One case of a check. A check answers "does each case work, and what does it read?", so a case that fails is
- * recorded (refused on its primary, with the error) and the next case still runs.
+ * recorded (refused on its primary, with the error) and the next case still runs, unless its recorder could not be
+ * stopped.
  */
 export async function checkCase(
   primary: string,
@@ -401,6 +402,7 @@ export async function checkCase(
   try {
     return await measure();
   } catch (error) {
+    if (error instanceof RecorderStuck) throw error;
     const why =
       error instanceof Refusal
         ? `${error.validator}: ${error.message}`

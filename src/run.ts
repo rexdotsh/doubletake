@@ -8,6 +8,9 @@ import { sleep } from './sh.ts';
 import { type Region, type Transition, VIDEO_FPS, decodeFrames, transition, visualTimes } from './visual.ts';
 
 type RunValues = Record<string, number>;
+/** A failed run whose recorder may still be running: nothing measured after it would be valid, so it ends a check. */
+export class RecorderStuck extends Error {}
+
 /** A run's recording, if filmed, and when its action began (host clock). */
 type Filmed = { recording?: Recording; action: number };
 /** A measured window and the start of the app process in it, device clock. */
@@ -324,7 +327,12 @@ export async function runOnce(ctx: RunContext): Promise<RunResult> {
       ? await launchRun(ctx, state, values, refused, filming)
       : await windowRun(ctx, state, values, refused, filming);
   } catch (error) {
-    await filming.recording?.stop().catch(() => undefined);
+    if (filming.recording)
+      await filming.recording.stop().catch((stopError: unknown) => {
+        throw new RecorderStuck(
+          `the run failed (${error instanceof Error ? error.message : String(error)}) and its recording could not be stopped: ${stopError instanceof Error ? stopError.message : String(stopError)}`,
+        );
+      });
     throw error;
   }
   const { recording, action } = outcome;

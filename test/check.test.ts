@@ -3,7 +3,7 @@ import { Refusal } from '../src/device.ts';
 import { validate } from '../src/bench.ts';
 import type { Device, LogTap } from '../src/device.ts';
 import { checkCase } from '../src/experiment.ts';
-import { runOnce } from '../src/run.ts';
+import { RecorderStuck, runOnce } from '../src/run.ts';
 
 test('a check records a case that throws, refused on its primary, instead of ending', async () => {
   expect(await checkCase('cpu.idle', async () => ({ values: { 'cpu.idle': 5 }, refused: {} }))).toEqual({
@@ -68,4 +68,28 @@ test('a filmed run that fails stops its recorder before the error goes on', asyn
   );
   expect(failed).toBe(true);
   expect(stops).toBe(1);
+  const stuck = await runOnce({
+    device: { ...device, record: async () => ({ stop: () => Promise.reject(new Error('adb gone')) }) },
+    appId: 'app',
+    bench: { app: {}, cases: {} },
+    case: c,
+    tap,
+    offset: 0,
+    dir: '.',
+    video: 'x.mp4',
+  }).then(
+    () => 'ok',
+    (error: unknown) => (error instanceof RecorderStuck ? 'stuck' : 'other'),
+  );
+  expect(stuck).toBe('stuck');
+});
+
+test('a recorder that cannot be stopped ends the check', async () => {
+  const stuck = checkCase('cpu.idle', async () => {
+    throw new RecorderStuck('could not stop');
+  }).then(
+    () => 'went on',
+    (error: unknown) => (error instanceof RecorderStuck ? 'ended' : 'other'),
+  );
+  expect(await stuck).toBe('ended');
 });
