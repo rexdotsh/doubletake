@@ -24,11 +24,15 @@ const WAITING = new Set([
   'semaphore_timedwait_trap',
 ]);
 
-/** `Thread_123: name` or `Thread_123   DispatchQueue_1: label  (serial)` to the name or label; ids vary per run. */
-function threadName(text: string): string {
-  const queue = /DispatchQueue_\d+: (.+?)(?:\s+\((?:serial|concurrent)\))?$/.exec(text)?.[1];
-  const named = /^Thread_\d+: (.+)$/.exec(text)?.[1];
-  return queue ?? named ?? '(unnamed thread)';
+/**
+ * `Thread_123: name`, `Thread_123   DispatchQueue_1: label  (serial)` or `Thread_123: Main Thread   DispatchQueue_<multiple>`
+ * to the name or queue label; thread ids vary per run.
+ */
+export function threadName(text: string): string {
+  const rest = text.replace(/^Thread_\d+:?\s*/, '');
+  const queue = /DispatchQueue_\d+: (.+?)(?:\s+\((?:serial|concurrent)\))?$/.exec(rest)?.[1];
+  const named = rest.replace(/\s*DispatchQueue_.*$/, '').trim();
+  return queue ?? (named || '(unnamed thread)');
 }
 
 const basename = (path: string) => path.slice(path.lastIndexOf('/') + 1) || path;

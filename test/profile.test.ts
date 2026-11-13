@@ -6,7 +6,7 @@ import { called, diffProfiles } from '../src/profile/diff.ts';
 import { flameSvg } from '../src/profile/flame.ts';
 import { parseCpuProfile, parseHermesTrace, parseJsProfile, toCpuProfile } from '../src/profile/hermes.ts';
 import { type Profile, builder, costs, mean } from '../src/profile/model.ts';
-import { parseSample, parseSimpleperf } from '../src/profile/native.ts';
+import { parseSample, parseSimpleperf, threadName } from '../src/profile/native.ts';
 import {
   deobfuscate,
   deobfuscateProfile,
@@ -351,4 +351,11 @@ test('the report and the card show the profile and what moved', () => {
   expect(text).toContain('cold start  profile (JS): not recorded: no hook');
   const card = profileCard(e).join('\n');
   expect(card).toContain('| 🔺 total | grows  (lib) | 40.0 ms | 65.0 ms | +25.0 ms (6/6) |');
+});
+
+test('sample thread lines name the thread, its queue, or neither', () => {
+  expect(threadName('Thread_10215433: Main Thread   DispatchQueue_<multiple>')).toBe('Main Thread');
+  expect(threadName('Thread_100   DispatchQueue_1: com.apple.main-thread  (serial)')).toBe('com.apple.main-thread');
+  expect(threadName('Thread_101: com.facebook.react.JavaScript')).toBe('com.facebook.react.JavaScript');
+  expect(threadName('Thread_102')).toBe('(unnamed thread)');
 });
