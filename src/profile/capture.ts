@@ -40,8 +40,11 @@ const refusal = (what: string, error: unknown) =>
     ? new Refusal('NoProfiler', `${what}: ${error.message}`)
     : new Refusal('NoProfiler', `${what}: ${error instanceof Error ? error.message : String(error)}`);
 
-/** Starts `cmd`, reads the pid it prints first, and fails with its output if it exits within `settle` ms. */
-async function background(cmd: string, args: string[], what: string, settle = 500) {
+/**
+ * Starts `cmd`, whose only output is the pid of what it started in the background, and fails if it prints anything
+ * else or exits within `settle` ms. The caller owns the pid's cleanup either way.
+ */
+export async function background(cmd: string, args: string[], what: string, settle = 500) {
   const lines: string[] = [];
   const first = Promise.withResolvers<string>();
   const child = stream(cmd, args, (line) => {
@@ -60,6 +63,24 @@ async function background(cmd: string, args: string[], what: string, settle = 50
   return { child, pid, exited };
 }
 
+/**
+ * The device command that starts simpleperf in the background under `dir`: its own output goes to a log file and
+ * its pid to a pid file before anything else happens, so stdout carries only the pid and a cleanup can always
+ * find the process, even when the start is refused.
+ */
+export function simpleperfCommand(appId: string, dir: string) {
+  const files = {
+    data: `${dir}/doubletake-profile.data`,
+    pid: `${dir}/doubletake-profile.pid`,
+    log: `${dir}/doubletake-profile.log`,
+  };
+  return {
+    files,
+    start: `simpleperf record --app ${appId} -e cpu-clock -f 1000 --call-graph fp -o ${files.data} >${files.log} 2>&1 & echo $! >${files.pid}; echo $!; wait`,
+    kill: `p=$(cat ${files.pid} 2>/dev/null); [ -n "$p" ] && kill -9 $p 2>/dev/null; rm -f ${files.data} ${files.data}.txt ${files.pid} ${files.log}`,
+  };
+}
+
 async function ended(child: ChildProcess, exited: Promise<void>, ms: number, what: string): Promise<void> {
   if (await Promise.race([exited.then(() => true), sleep(ms).then(() => false)])) return;
   await stop(child, 'SIGKILL');
@@ -72,22 +93,25 @@ async function ended(child: ChildProcess, exited: Promise<void>, ms: number, wha
  */
 export function simpleperf(serial: string, appId: string): Recorder {
   let session: Awaited<ReturnType<typeof background>> | undefined;
-  const remote = `/data/local/tmp/doubletake-profile.data`;
-  const shell = async (cmd: string) => (await run('adb', ['-s', serial, 'shell', cmd])).stdout;
+  const cmd = simpleperfCommand(appId, '/data/local/tmp');
+  const remote = cmd.files.data;
+  const shell = async (c: string) => (await run('adb', ['-s', serial, 'shell', c])).stdout;
+  const kill = async () => {
+    await quietly(() => shell(cmd.kill));
+  };
   return {
     kind: 'native',
     async start() {
-      await shell(`rm -f ${remote}`);
-      session = await background(
-        'adb',
-        [
-          '-s',
-          serial,
-          'shell',
-          `simpleperf record --app ${appId} -e cpu-clock -f 1000 --call-graph fp -o ${remote} 2>&1 & echo $!; wait`,
-        ],
-        'simpleperf',
-      );
+      await kill();
+      try {
+        session = await background('adb', ['-s', serial, 'shell', cmd.start], 'simpleperf');
+      } catch (error) {
+        const log = await shell(`cat ${cmd.files.log} 2>/dev/null`).catch(() => '');
+        await kill();
+        throw log.trim() && error instanceof Refusal
+          ? new Refusal('NoProfiler', `${error.message}: ${log.trim()}`)
+          : error;
+      }
     },
     launched: async () => {},
     async stop(_state, raw) {
@@ -99,16 +123,16 @@ export function simpleperf(serial: string, appId: string): Recorder {
       await shell(`simpleperf report-sample --show-callchain -i ${remote} -o ${remote}.txt`);
       await run('adb', ['-s', serial, 'pull', remote, `${raw}.data`]);
       await run('adb', ['-s', serial, 'pull', `${remote}.txt`, `${raw}.txt`]);
-      await shell(`rm -f ${remote} ${remote}.txt`);
+      await kill();
       const text = await readFile(`${raw}.txt`, 'utf8');
       return parseSimpleperf(text);
     },
     async abort() {
       const live = session;
       session = undefined;
-      if (!live) return;
-      await quietly(() => shell(`kill -9 ${live.pid} 2>/dev/null; rm -f ${remote} ${remote}.txt`));
-      await quietly(() => stop(live.child, 'SIGKILL'));
+      // The pid file names the device's simpleperf whether or not its start was accepted.
+      await kill();
+      if (live) await quietly(() => stop(live.child, 'SIGKILL'));
     },
   };
 }

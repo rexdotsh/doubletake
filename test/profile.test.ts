@@ -1,10 +1,11 @@
 import { expect, test } from 'bun:test';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { validate } from '../src/bench.ts';
 import { Refusal } from '../src/device.ts';
-import { type Recorder, androidReadCommand } from '../src/profile/capture.ts';
+import { type Recorder, androidReadCommand, background, simpleperfCommand } from '../src/profile/capture.ts';
+import { run } from '../src/sh.ts';
 import { hooks, symbolFiles } from '../src/profile/session.ts';
 import { called, diffProfiles } from '../src/profile/diff.ts';
 import { flameSvg } from '../src/profile/flame.ts';
@@ -472,6 +473,43 @@ test('symbol files are found beside a build, or taken as given', async () => {
       map: join(dir, 'app.map'),
       r8: undefined,
     });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("simpleperf's start prints only its pid, so a diagnostic cannot hide it, and the pid file always kills it", async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'doubletake-test-'));
+  try {
+    // A simpleperf that complains on both streams, then keeps running.
+    await writeFile(join(dir, 'simpleperf'), '#!/bin/sh\necho "diagnostic"\necho "warning" >&2\nexec sleep 30\n', {
+      mode: 0o755,
+    });
+    const cmd = simpleperfCommand('com.example', dir);
+    const env = `PATH=${dir}:$PATH; `;
+    const started = await background('sh', ['-c', env + cmd.start], 'simpleperf', 200);
+    const pid = Number(started.pid);
+    expect(Number((await readFile(cmd.files.pid, 'utf8')).trim())).toBe(pid);
+    expect(await readFile(cmd.files.log, 'utf8')).toContain('diagnostic');
+    expect(() => process.kill(pid, 0)).not.toThrow();
+    await new Promise<void>((resolve) => {
+      started.child.once('close', () => resolve());
+      started.child.kill('SIGKILL');
+    });
+    // The host side is gone; the device side is still found through the pid file.
+    await run('sh', ['-c', cmd.kill]);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(() => process.kill(pid, 0)).toThrow();
+    // A simpleperf that exits at once is refused, and the pid file it left is still cleaned up.
+    await writeFile(join(dir, 'simpleperf'), '#!/bin/sh\necho "no permission"\nexit 1\n', { mode: 0o755 });
+    expect(
+      await background('sh', ['-c', env + cmd.start], 'simpleperf', 200).then(
+        () => 'started',
+        (error: unknown) => String(error),
+      ),
+    ).toContain('did not start');
+    await run('sh', ['-c', cmd.kill]);
+    expect(await readFile(cmd.files.pid, 'utf8').catch(() => 'gone')).toBe('gone');
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
