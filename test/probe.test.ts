@@ -379,6 +379,14 @@ const page = (appId: string, deviceName: string, url: string, logical = deviceNa
   reactNative: { logicalDeviceId: logical },
 });
 
+const at = (device: string, n: number) => `ws://m/inspector/debug?device=${device}&page=${n}`;
+
+const legacy = (device: string) => ({
+  description: 'com.app',
+  deviceName: 'iPhone 17',
+  webSocketDebuggerUrl: at(device, 1),
+});
+
 test('the CDP target is exactly the app, on exactly this device, and only one', () => {
   const emulator = 'sdk_phone (emulator)';
   expect(pickTarget([page('com.app', 'sdk_phone - 16 - API 36', 'ws://1')], 'com.app', emulator)).toEqual({
@@ -400,14 +408,19 @@ test('the CDP target is exactly the app, on exactly this device, and only one', 
   expect(pickTarget(two, 'com.app', emulator)).toEqual({
     refusal: '2 devices run com.app as sdk_phone (emulator): stop the others or use one Metro per device',
   });
-  // One device listing a legacy page beside the current one: the current one.
-  const legacy = { description: 'com.app', deviceName: 'iPhone 17', webSocketDebuggerUrl: 'ws://legacy' };
-  expect(pickTarget([page('com.app', 'iPhone 17', 'ws://new'), legacy], 'com.app', 'iPhone 17')).toEqual({
-    url: 'ws://new',
-  });
-  // Its current page names the device by a logical id, the legacy page by its name: still one device.
-  expect(pickTarget([page('com.app', 'iPhone 17', 'ws://cur', 'f00d'), legacy], 'com.app', 'iPhone 17')).toEqual({
-    url: 'ws://cur',
+  // One device listing a legacy page beside the current one (Metro's device id in both URLs): the current one,
+  // even when the current page names the device by a logical id.
+  expect(pickTarget([page('com.app', 'iPhone 17', at('d1', 2), 'f00d'), legacy('d1')], 'com.app', 'iPhone 17')).toEqual(
+    { url: at('d1', 2) },
+  );
+  // Two same-named devices, one with only a legacy page and one with a current page: refused, never the current one.
+  expect(pickTarget([page('com.app', 'iPhone 17', at('d2', 2), 'f00d'), legacy('d1')], 'com.app', 'iPhone 17')).toEqual(
+    { refusal: '2 devices run com.app as iPhone 17: stop the others or use one Metro per device' },
+  );
+  // A legacy page that cannot be tied to a device is not merged with the current one.
+  const loose = { description: 'com.app', deviceName: 'iPhone 17', webSocketDebuggerUrl: 'ws://legacy', id: 'x' };
+  expect(pickTarget([page('com.app', 'iPhone 17', 'ws://new'), loose], 'com.app', 'iPhone 17')).toEqual({
+    refusal: '2 devices run com.app as iPhone 17: stop the others or use one Metro per device',
   });
   expect(pickTarget({}, 'x', 'y')).toEqual({ refusal: "Metro's /json/list is not a list" });
   // A runtime Metro names no device for cannot be checked: refused, even when it is the only one.

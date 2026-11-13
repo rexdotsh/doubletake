@@ -21,9 +21,17 @@ const sameDevice = (listed: string, device: string) => {
   return listed === base || listed.startsWith(`${base} - `);
 };
 
+/**
+ * Which device a page is on: Metro's own device id from its debugger URL (`?device=…&page=…`), the same for a
+ * device's legacy and current pages; else the page's logical device id; else the page alone (never merged).
+ */
 function deviceOf(t: Record<string, unknown>): string {
+  const device = /[?&]device=([^&]+)/.exec(String(t.webSocketDebuggerUrl))?.[1];
+  if (device) return `device:${decodeURIComponent(device)}`;
   const logical = isRecord(t.reactNative) ? t.reactNative.logicalDeviceId : undefined;
-  return String(logical ?? t.deviceName ?? t.id);
+  return logical === undefined
+    ? `page:${JSON.stringify(t.id ?? t.webSocketDebuggerUrl)}`
+    : `logical:${JSON.stringify(logical)}`;
 }
 
 /**
@@ -43,16 +51,15 @@ export function pickTarget(list: unknown, appId: string, device: string): { url:
     return {
       refusal: `${appId} runs on ${[...new Set(named.map((t) => String(t.deviceName)))].join(', ')}, not ${device}`,
     };
-  // One device can list a legacy page beside the current one; only the current ones (with `reactNative`) count
-  // when there are any, so a logical id and a display name of one device are never two devices.
-  const modern = here.filter((t) => isRecord(t.reactNative));
-  const pages = modern.length ? modern : here;
-  const devices = new Set(pages.map(deviceOf));
+  // Every page counts, legacy ones too: a legacy page merges with a current one only when both are on one device.
+  const devices = new Set(here.map(deviceOf));
   if (devices.size > 1)
     return {
       refusal: `${devices.size} devices run ${appId} as ${device}: stop the others or use one Metro per device`,
     };
-  return { url: String(pages.at(-1)?.webSocketDebuggerUrl) };
+  // One device can list a legacy page beside the current one: the current one carries `reactNative`.
+  const modern = here.filter((t) => isRecord(t.reactNative));
+  return { url: String((modern.length ? modern : here).at(-1)?.webSocketDebuggerUrl) };
 }
 
 async function find(metro: string, appId: string, device: string, d: Deadlines): Promise<string> {
