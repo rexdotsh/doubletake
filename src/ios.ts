@@ -3,8 +3,10 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { axe as axeInput } from './axe.ts';
 import { type Device, type Recording, logTap } from './device.ts';
+import { parseSdkLine } from './events.ts';
 import { psTime } from './host.ts';
 import { run, stop, stream, which } from './sh.ts';
+import { iosMark, osLogTime } from './timeline.ts';
 import { dig, isRecord } from './util.ts';
 
 type SimDevice = { udid: string; name: string; state: string; runtime: string };
@@ -161,9 +163,10 @@ function simulator(udid: string, name: string, os: string, axe: string | undefin
     },
     async logs(appId) {
       const executable = executables.get(appId);
-      const predicate = executable
-        ? `process == "${executable}" AND eventMessage CONTAINS "[doubletake]"`
-        : 'eventMessage CONTAINS "[doubletake]"';
+      const lines = ['[doubletake]', '[perf-mark]', 'Running \\"']
+        .map((text) => `eventMessage CONTAINS "${text}"`)
+        .join(' OR ');
+      const predicate = executable ? `process == "${executable}" AND (${lines})` : lines;
       return logTap(
         'xcrun',
         ['simctl', 'spawn', udid, 'log', 'stream', '--style', 'ndjson', '--level', 'debug', '--predicate', predicate],
@@ -171,8 +174,13 @@ function simulator(udid: string, name: string, os: string, axe: string | undefin
           if (!line.startsWith('{')) return null;
           const json: unknown = JSON.parse(line);
           const message = dig(json, 'eventMessage');
-          const pid = dig(json, 'processID');
-          return typeof message === 'string' ? { message, pid: typeof pid === 'number' ? pid : undefined } : null;
+          const writer = dig(json, 'processID');
+          const time = dig(json, 'timestamp');
+          if (typeof message !== 'string') return null;
+          const pid = typeof writer === 'number' ? writer : undefined;
+          const event = parseSdkLine(message);
+          if (event) return pid === undefined ? event : { ...event, pid };
+          return typeof time === 'string' ? iosMark(message, osLogTime(time), pid) : null;
         },
       );
     },

@@ -36,6 +36,10 @@
     "./sdk": {
       "types": "./dist/sdk/index.d.ts",
       "default": "./dist/sdk/index.js"
+    },
+    "./marks": {
+      "types": "./dist/sdk/marks.d.ts",
+      "default": "./dist/sdk/marks.js"
     }
   },
   "scripts": {

@@ -1,8 +1,10 @@
 import { readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { type Device, type Point, type Recording, isPoint, logTap } from './device.ts';
+import { parseSdkLine } from './events.ts';
 import { maestroCommands, maestroInline } from './maestro.ts';
 import { run, sleep, stop, stream } from './sh.ts';
+import { androidMark, logcatLine } from './timeline.ts';
 
 type Adb = (...args: string[]) => Promise<string>;
 
@@ -171,12 +173,13 @@ function device(serial: string, adb: Adb, shell: (cmd: string) => Promise<string
       const hwm = /VmHWM:\s*(\d+)/.exec(await shell(`cat /proc/${pid}/status 2>/dev/null || true`))?.[1];
       return { endMiB: meminfo.pss, peakMiB: hwm ? Number(hwm) / 1024 : undefined };
     },
-    logs: () =>
+    logs: (pkg) =>
       logTap('adb', ['-s', serial, 'logcat', '-v', 'epoch', '-T', '1'], (line) => {
-        // -v epoch: "<seconds.ms>  <pid>  <tid> <level> <tag>: <message>"
-        const at = line.indexOf('[doubletake] ');
-        const pid = Number(/^\s*\d+\.\d+\s+(\d+)/.exec(line)?.[1]);
-        return at < 0 ? null : { message: line.slice(at), pid: Number.isFinite(pid) ? pid : undefined };
+        // SDK lines and app marks carry the app's own clock; the platform's lines are timed by logcat.
+        const event = parseSdkLine(line);
+        if (!event) return androidMark(line, pkg);
+        const pid = logcatLine(line)?.pid;
+        return pid === undefined ? event : { ...event, pid };
       }),
     clockOffset: () => clockOffset(shell),
     async record(path): Promise<Recording> {

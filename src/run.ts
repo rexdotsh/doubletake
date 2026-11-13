@@ -5,6 +5,7 @@ import { Refusal } from './device.ts';
 import { countersIn, marksIn, ofProcess } from './events.ts';
 import { type FlowState, launch, runSteps } from './flow.ts';
 import { PROBE_METRICS, type ProbeDetail, type ProbeSession, probeValues } from './probe.ts';
+import { phaseMetric, phaseRefusal, phasesOf } from './timeline.ts';
 import { sleep } from './sh.ts';
 import { type Region, type Transition, VIDEO_FPS, decodeFrames, transition, visualTimes } from './visual.ts';
 
@@ -71,7 +72,21 @@ function refuse(refused: Record<string, string>, metrics: readonly string[], why
 /** SDK counters for a window; families the app did not turn on are refused, never zero. */
 function addSdk(values: RunValues, refused: Record<string, string>, ctx: RunContext, window: Window): void {
   const events = ofProcess(ctx.tap.events, window.pid);
-  for (const [name, at] of marksIn(events, window.from, window.to)) values[`mark.${name}`] = at - window.from;
+  // The platform's own lines are marks only on a timeline, which also gives the phases between marks.
+  const timeline = ctx.case.launch?.timeline === true;
+  const marks = marksIn(
+    events.filter((e) => e.kind !== 'mark' || !e.os || timeline),
+    window.from,
+    window.to,
+  );
+  for (const [name, at] of marks) values[`mark.${name}`] = at - window.from;
+  const relative = new Map([...marks].map(([name, at]) => [name, at - window.from]));
+  if (timeline) for (const p of phasesOf(relative)) values[phaseMetric(p.from, p.to)] = p.ms;
+  for (const m of [ctx.case.primary, ...(ctx.case.metrics ?? [])]) {
+    if (values[m] !== undefined) continue;
+    if (m.startsWith('mark.')) refused[m] = `NoMarker: the run wrote no ${m.slice('mark.'.length)} mark`;
+    else if (m.startsWith('phase.')) refused[m] = phaseRefusal(m, relative);
+  }
   const got = countersIn(events, window.from, window.to, window.launched);
   if (!got) {
     refuse(

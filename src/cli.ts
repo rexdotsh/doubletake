@@ -1,4 +1,4 @@
-import { writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { cpus, totalmem } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -17,12 +17,15 @@ import { card, summary } from './report.ts';
 import { run, which } from './sh.ts';
 import { type Experiment, type Variant, experimentDir, loadExperiment, newId } from './store.ts';
 import { ffmpegPath } from './visual.ts';
+import { readLaunches, timelineSvg, timelineText, timelines } from './timeline-report.ts';
 
 const USAGE = `doubletake ${pkg.version}: A/B performance for React Native apps on simulators and emulators
 
   doubletake bench <file> --base <app> --head <app>   paired runs of two builds, a verdict per case
   doubletake check <file> --head <app>                each case once: does it work, what does it read?
   doubletake report [exp|latest] [--format text|md|json] [--comment <pr> [--repo owner/name]]
+  doubletake timeline [exp|latest] [--case name] [--format text|json] [--out dir]
+                                                      launch timelines: marks per launch, median waterfalls, SVGs
   doubletake bundle <js> <map> [<base js> <base map>] what a Metro bundle ships, by package; with a base, the change
   doubletake status                                   what this machine can measure
   doubletake mcp                                      an MCP server (stdio) with the same commands as tools
@@ -69,6 +72,7 @@ type Flags = {
   format?: string;
   comment?: string;
   repo?: string;
+  out?: string;
   help?: boolean;
   version?: boolean;
 };
@@ -94,6 +98,7 @@ const OPTIONS = {
   format: { type: 'string' },
   comment: { type: 'string' },
   repo: { type: 'string' },
+  out: { type: 'string' },
   help: { type: 'boolean', short: 'h' },
   version: { type: 'boolean', short: 'v' },
 } as const;
@@ -306,6 +311,27 @@ async function report(ref: string | undefined, flags: Flags): Promise<void> {
   out(result.stdout.trim());
 }
 
+async function timeline(ref: string | undefined, flags: Flags): Promise<void> {
+  const { dir, experiment } = await loadExperiment(ref ?? 'latest');
+  const all = timelines(experiment, await readLaunches(dir)).filter(
+    (t) => !flags.case?.length || flags.case.includes(t.case),
+  );
+  if (!all.length)
+    throw new Error(
+      `${experiment.id} has no measured launch case (experiments from before timelines do not say which runs were launches)`,
+    );
+  const folder = flags.out ? resolve(flags.out) : dir;
+  await mkdir(folder, { recursive: true });
+  const files: string[] = [];
+  for (const t of all) {
+    const file = join(folder, `timeline-${t.case.replace(/[^\w-]+/g, '_')}.svg`);
+    await writeFile(file, `${timelineSvg(t)}\n`);
+    files.push(file);
+  }
+  if (flags.format === 'json') return out(JSON.stringify(all, null, 2));
+  out(`${all.map((t) => timelineText(t, experiment.device.platform)).join('\n\n')}\n\nSVG: ${files.join(', ')}`);
+}
+
 async function bundle(files: (string | undefined)[]): Promise<void> {
   const [headJs, headMap, baseJs, baseMap] = files;
   if (!headJs || !headMap || (baseJs && !baseMap))
@@ -351,6 +377,7 @@ async function main(): Promise<void> {
   if (flags.help || !command) return out(USAGE);
   if (command === 'bench' || command === 'check') return measure(command, arg, flags);
   if (command === 'report') return report(arg, flags);
+  if (command === 'timeline') return timeline(arg, flags);
   if (command === 'status') return status();
   if (command === 'mcp') return serve();
   if (command === 'bundle') return bundle([arg, ...rest]);

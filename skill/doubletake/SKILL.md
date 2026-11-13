@@ -51,6 +51,10 @@ export default {
 - Per screen, renders and requests: a bench `probe` (`{ cdp: '<metro url>' }` on a dev client, or a `bridge` the app exposes) and `probe.renders`, `probe.commits`, `probe.requests`, `probe.duplicates`, `probe.bytes` in run or idle cases; `report` lists the re-rendering components, duplicate requests and a waterfall.
 - Android adds `launch.ttid` (`am start -W`) and `frames.janky` (`gfxinfo`).
 
+## Where does startup time go?
+
+Give a launch case `timeline: true`. The platform's lines (`rn.start`, `js.load`, `js.run`, `first.frame`, `splash.removed`, `fully.drawn`; most on Android) and the app's marks become `mark.<name>` metrics, and the gaps between consecutive marks become `phase.<from>-><to>` metrics, compared like any other. Apps mark their start without the SDK by logging `[perf-mark] <name> <Date.now()>` (README: the marks protocol). `doubletake timeline latest` prints each launch, the median waterfall per side and each phase's A/B, and writes an SVG per case. A mark a launch did not write is reported missing, never filled in.
+
 ## Limits
 
 Simulators and emulators run on the Mac: compare builds, never quote absolute times as a phone's. No UI frame metrics on iOS yet (Instruments). Cold starts are process-cold, not disk-cold.

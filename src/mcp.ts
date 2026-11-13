@@ -52,6 +52,13 @@ const TOOLS: Tool[] = [
     positional: 'experiment',
     flags: { format: 'text, md or json' },
   },
+  {
+    name: 'timeline',
+    description:
+      "An experiment's launch timelines: each launch's marks, the median waterfall per side, each phase's A/B, and an SVG per case.",
+    positional: 'experiment',
+    flags: { case: 'only this case', format: 'text or json', out: 'folder for the SVGs' },
+  },
 ];
 
 function schema(tool: Tool) {
