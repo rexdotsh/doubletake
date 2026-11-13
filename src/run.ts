@@ -39,6 +39,17 @@ export type RunContext = {
   video?: string;
   /** The app's probe, when the case declares probe metrics. */
   probe?: ProbeSession;
+  /** Profilers around the window (`--profile`): only in untimed blocks. */
+  profile?: RunProfile;
+};
+
+/** Called at a run's edges: `start` before the window (for a cold launch, before the launch), `stop` after it. */
+export type RunProfile = {
+  start(state: FlowState, cold: boolean): Promise<void>;
+  launched(state: FlowState): Promise<void>;
+  stop(state: FlowState): Promise<void>;
+  /** Kills every profiler still running: the run failed between start and stop. */
+  abort(): Promise<void>;
 };
 
 /** Log lines reach the host a few ms after they are written; wait this long after a window before reading it. */
@@ -239,7 +250,9 @@ async function launchRun(
     filming.recording = recording;
     await sleep(1000);
   }
+  await ctx.profile?.start(state, true);
   const launched = await launch(state);
+  await ctx.profile?.launched(state);
   const start = launched.t0 + ctx.offset;
   if (launched.ttid !== undefined) values['launch.ttid'] = launched.ttid;
   const until = c.launch?.until?.slice('mark:'.length);
@@ -252,6 +265,7 @@ async function launchRun(
     values['launch.ttfd'] = mark.t - start;
   }
   await sleep(ms(c.launch?.hold ?? (recording ? '3s' : '1s')));
+  await ctx.profile?.stop(state);
   values['cpu.time'] = await device.cpuMs(launched.pid);
   const end = Date.now() + ctx.offset;
   await sleep(DRAIN_MS);
@@ -286,11 +300,13 @@ async function windowRun(
   await device.frames?.reset(appId);
   const framesFrom = (resetAt + Date.now()) / 2;
   const cpuBefore = await device.cpuMs(pid);
+  await ctx.profile?.start(state, false);
   const start = Date.now();
   state.since = start + ctx.offset;
   if (c.idle) await sleep(ms(c.idle));
   else await runSteps(c.run ?? [], state);
   const end = Date.now();
+  await ctx.profile?.stop(state);
   const cpu = (await device.cpuMs(pid)) - cpuBefore;
   // Frame counters keep counting: read them at the window's end, before the padding, drain and memory.
   const readAt = Date.now();
@@ -370,6 +386,7 @@ export async function runOnce(ctx: RunContext): Promise<RunResult> {
       ? await launchRun(ctx, state, values, refused, filming)
       : await windowRun(ctx, state, values, refused, filming);
   } catch (error) {
+    await ctx.profile?.abort();
     if (filming.recording)
       await filming.recording.stop().catch((stopError: unknown) => {
         throw new RecorderStuck(

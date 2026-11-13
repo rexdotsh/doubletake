@@ -214,6 +214,26 @@ mark('home_interactive');
 | `probe.commits`, `probe.renders`                    | both, probe | React commits and component renders in the window (the app probe: CDP or a bridge)                                                                                                   |
 | `probe.requests`, `probe.duplicates`, `probe.bytes` | both, probe | requests started in the window, repeats of an earlier one (method, URL, query, body), response bytes                                                                                 |
 
+## Profiles
+
+`--profile` answers "where did the time go?" next to "is head faster?". After a case's timed pairs it runs profiled pairs (6 by default, `--profile-pairs`), in the same alternating order, each block a discarded warm run and one profiled run, so profiling never touches a timed run. `--pairs 0 --profile` profiles only; `check --profile` profiles head once per case.
+
+| Kind   | Where   | Recorded with                                                                                                                                                                                                                                   |
+| ------ | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| native | Android | `simpleperf record --app` (cpu-clock, 1 kHz, frame-pointer call chains, every thread); needs a rooted (userdebug) emulator or a profileable build. Java and Kotlin frames through an R8 mapping                                                 |
+| native | iOS     | `/usr/bin/sample` on the simulator app's process by its pid (1 ms, every thread; stacks that end blocked in the kernel are left out; a cold launch is sampled from when the launch command returns). Instruments' Time Profiler is not used yet |
+| JS     | both    | Hermes's sampling profiler over CDP through Metro (`--metro <url>`, dev builds), or the app's own hook on a release build (below); symbolicated with the bundle's source map                                                                    |
+
+A release build's Hermes has no inspector, so JS needs the app's help: declare a hook in the bench file, steps that start and stop the app's profiler (a deep link to a test-only handler that calls `HermesSamplingProfiler`, or [react-native-release-profiler](https://github.com/margelo/react-native-release-profiler)) and where it writes the profile:
+
+```ts
+profile: { js: { start: [{ open: 'myapp://profile/start' }], stop: [{ open: 'myapp://profile/stop' }], file: { android: 'cache/profiles/', ios: 'Library/Caches/profiles/' } } },
+```
+
+Source maps: `<build>.map` beside the build, or `--base-map`/`--head-map` (Metro's map, or Hermes's composed map; Metro's function maps name the functions). R8: `<build>.mapping.txt` or `--base-mapping`/`--head-mapping`. A Metro bundle's map comes from Metro.
+
+What you get, per case and kind: top functions by self and total time, top modules (packages and app folders for JS, libraries for native) and threads, a self-contained flame graph SVG per side (`profiles/<case>/<kind>-<side>.svg`), the mean profile as a `.cpuprofile` for Chrome DevTools or speedscope, and the raw files of every run. With two sides, a diff per function and module: medians over the pairs, and a function is called slower or faster only when its per-pair differences agree as the verdicts demand (a bootstrap interval that clears zero, a signed-rank test below 5%, 6 pairs or more) and the change is at least 5 ms and 5%. That test is per row, not corrected across rows: a lone row is a lead to read in the flame graphs, not a verdict. The PR card lists the rows that moved.
+
 ## How a verdict is made
 
 - Each side gets one discarded warm-up block, then pairs alternate base, head and head, base. A block installs the build (when both share a bundle id), does one discarded run, then 3 measured runs; the block's value is their median.
@@ -244,6 +264,7 @@ Exit codes: 0 done, 1 error, 4 a primary or a whole case was refused (a busy hos
 - `--queue <duration>`: how long the whole bench may wait for a quiet host (30 minutes by default).
 - `--side-by-side` (iOS) installs both builds as copies under `<bundle id>.doubletakebase` and `.doubletakehead`, ad-hoc signed without entitlements; both copies are uninstalled first, so each experiment starts from empty containers, and no block reinstalls. Apps with extensions and benches with deep links are refused (both copies claim the same URL schemes).
 - `--video <case>` films one more run per side after the pairs (never a timed one) and puts them side by side with a shared timer.
+- `--profile` records profiles in extra pairs after the timed ones: see [Profiles](#profiles).
 - `report --format md` is the PR card; `--comment <pr>` posts it with `gh pr comment`, attaching the video.
 
 Experiments live in `~/.doubletake/experiments/<id>/`: `result.json` (strobe-shaped: `id`, `kind`, `variants`, `series[].primary` with `verdict_kind`, `lo`, `hi`, `needed_pairs`), `runs.ndjson` (every run, warm-ups included), `blocks.ndjson` (other processes' CPU during each measured block, failed ones included: mean and busiest 5 s, each with the three programs that used the most in it, in cores) and videos.
@@ -288,7 +309,7 @@ Timed results are only as good as the machine is quiet. doubletake measures the 
 - **Simulators and emulators are not phones.** They run on the Mac's CPU and GPU, without thermal limits or a phone's storage. Use them to compare two builds on the same machine, never to quote absolute launch times.
 - **iOS UI frames.** Hitches and frame times need Instruments; doubletake does not read them yet, and refuses `frames.*` on iOS. JS frames come from the SDK.
 - **Cold starts are process-cold, not disk-cold.** Neither simctl nor an unrooted emulator can drop the OS file cache.
-- **JS hotspots in release builds.** Hermes's sampling profiler is not reachable in a release build; profile a dev build instead.
+- **JS hotspots in release builds.** Hermes's sampling profiler is not reachable from outside a release build: profile a dev build through Metro, or give the bench the app's own profiler hook (see [Profiles](#profiles)).
 - **Input does not wait for the screen to settle.** iOS taps and swipes go through [AXe](https://github.com/cameroncooke/AXe) and Android ones through `adb input`, in milliseconds each, and return when the gesture ends: follow them with a `wait` (a mark) or a `sleep` where the run must include what they start. An element tap waits up to 10 s for its element. On Android it goes through Maestro, which takes seconds to start, so keep element taps in `setup`; with `alerts`, each iOS input batch first reads the accessibility tree (a fraction of a second).
 - **Shared CI runners.** Timing verdicts need a machine that runs one bench at a time.
 

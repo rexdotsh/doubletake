@@ -23,6 +23,7 @@ const TOOLS: Tool[] = [
       case: 'only this case',
       platform: 'ios or android',
       device: 'udid, name or serial',
+      profile: 'true: one profiled run per case after the check',
       host: 'ssh command of the machine with the device',
       'host-init': 'shell run first on the host',
     },
@@ -42,6 +43,8 @@ const TOOLS: Tool[] = [
       platform: 'ios or android',
       device: 'udid, name or serial',
       video: 'film this case side by side',
+      profile: 'true: profiled pairs after the timed ones (native and, where it can, JS)',
+      'profile-pairs': 'profiled pairs per case (default 6)',
       host: 'ssh command of the machine with the device',
       'host-init': 'shell run first on the host',
     },
@@ -105,7 +108,9 @@ async function call(name: string, input: Record<string, unknown>): Promise<{ tex
   if (positional) args.push(positional);
   for (const flag of Object.keys(tool.flags)) {
     const v = text(flag);
-    if (v) args.push(`--${flag}`, v);
+    if (flag === 'profile') {
+      if (v === 'true') args.push('--profile');
+    } else if (v) args.push(`--${flag}`, v);
   }
   if (name === 'bench' || name === 'check') args.push('--json');
   const { code, out } = name === 'bench' || name === 'check' ? await serialized(() => cli(args)) : await cli(args);

@@ -1,11 +1,17 @@
 import { expect, test } from 'bun:test';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { validate } from '../src/bench.ts';
+import { Refusal } from '../src/device.ts';
+import { type Recorder, androidReadCommand, background, simpleperfCommand } from '../src/profile/capture.ts';
+import { run } from '../src/sh.ts';
+import { hooks, symbolFiles } from '../src/profile/session.ts';
 import { called, diffProfiles } from '../src/profile/diff.ts';
 import { flameSvg } from '../src/profile/flame.ts';
 import { parseCpuProfile, parseHermesTrace, parseJsProfile, toCpuProfile } from '../src/profile/hermes.ts';
-import { type Profile, builder, costs, mean } from '../src/profile/model.ts';
+import { type Profile, type ProfileKind, builder, costs, mean } from '../src/profile/model.ts';
 import { parseSample, parseSimpleperf, threadName } from '../src/profile/native.ts';
 import {
   deobfuscate,
@@ -341,6 +347,17 @@ test('a profile written as .cpuprofile reads back to the same costs', () => {
   expect(get(back.functions, (f) => f.name === 'layout').self).toBeCloseTo(12, 1);
 });
 
+test('a bench file may declare an app profiler hook, and is checked', () => {
+  const bench = validate({
+    cases: { idle: { idle: '5s', primary: 'cpu.idle' } },
+    profile: { js: { stop: [{ open: 'app://profile/stop' }], file: { android: 'cache/profiles/' } } },
+  });
+  expect(bench.profile?.js?.file.android).toBe('cache/profiles/');
+  expect(() => validate({ cases: bench.cases, profile: { js: { stop: [], file: { web: 'x' } } } })).toThrow(
+    'unknown key web',
+  );
+});
+
 test('the report and the card show the profile and what moved', () => {
   const noise = [1, -2, 0, 2, -1, 1];
   const pairs = noise.map((n): [Profile, Profile] => [pairProfile(0, n), pairProfile(25, -n)]);
@@ -383,4 +400,138 @@ test('sample thread lines name the thread, its queue, or neither', () => {
   expect(threadName('Thread_100   DispatchQueue_1: com.apple.main-thread  (serial)')).toBe('com.apple.main-thread');
   expect(threadName('Thread_101: com.facebook.react.JavaScript')).toBe('com.facebook.react.JavaScript');
   expect(threadName('Thread_102')).toBe('(unnamed thread)');
+});
+
+const recorder = (kind: ProfileKind, log: string[], fail?: { at: 'start' | 'stop'; error: Error }): Recorder => ({
+  kind,
+  start: async () => {
+    log.push(`${kind} start`);
+    if (fail?.at === 'start') throw fail.error;
+  },
+  launched: async () => {},
+  stop: async () => {
+    log.push(`${kind} stop`);
+    if (fail?.at === 'stop') throw fail.error;
+    return builder(kind, 'test').done();
+  },
+  abort: async () => void log.push(`${kind} abort`),
+});
+// The recorders here never read the flow state.
+const state: Parameters<Recorder['start']>[0] = JSON.parse('{}');
+
+test('a profiler that refuses to start is aborted, refused and dropped; the others go on', async () => {
+  const log: string[] = [];
+  const live = [recorder('native', log), recorder('js', log, { at: 'start', error: new Refusal('NoProfiler', 'no') })];
+  const refused = new Map<ProfileKind, string>();
+  const got = new Map<ProfileKind, Profile>();
+  const h = hooks(live, refused, (k) => k, got);
+  await h.start(state, false);
+  await h.stop(state);
+  expect(log).toEqual(['native start', 'js start', 'js abort', 'native stop']);
+  expect(refused.get('js')).toBe('no');
+  expect([...got.keys()]).toEqual(['native']);
+});
+
+test('an unexpected profiler failure, or a failed run, aborts every profiler, dropped ones too', async () => {
+  const log: string[] = [];
+  const live = [recorder('native', log), recorder('js', log, { at: 'stop', error: new Error('socket closed') })];
+  const h = hooks(live, new Map(), (k) => k, new Map());
+  await h.start(state, false);
+  expect(
+    await h.stop(state).then(
+      () => 'stopped',
+      (error: unknown) => String(error),
+    ),
+  ).toContain('socket closed');
+  expect(log.filter((l) => l.endsWith('abort')).toSorted()).toEqual(['js abort', 'js abort', 'native abort']);
+  const log2: string[] = [];
+  const h2 = hooks([recorder('native', log2)], new Map(), (k) => k, new Map());
+  await h2.start(state, true);
+  await h2.abort();
+  expect(log2).toEqual(['native start', 'native abort']);
+});
+
+test("an app's profile file is listed and read by the same user, the shell or the app through run-as", () => {
+  expect(androidReadCommand('com.example', 'cache/profiles/')).toBe(
+    `(cd '/data/data/com.example/cache/profiles/' && cat "$(ls -t | head -1)") 2>/dev/null || run-as com.example sh -c 'cd '\\''/data/data/com.example/cache/profiles/'\\'' && cat "$(ls -t | head -1)"'`,
+  );
+  expect(androidReadCommand('com.example', '/sdcard/p.json')).toBe(
+    `(cat '/sdcard/p.json') 2>/dev/null || run-as com.example sh -c 'cat '\\''/sdcard/p.json'\\'''`,
+  );
+});
+
+test('symbol files are found beside a build, or taken as given', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'doubletake-test-'));
+  try {
+    await writeFile(join(dir, 'app.apk'), '');
+    await writeFile(join(dir, 'app.map'), '{}');
+    await writeFile(join(dir, 'app.mapping.txt'), '');
+    expect(await symbolFiles(join(dir, 'app.apk'))).toEqual({
+      map: join(dir, 'app.map'),
+      r8: join(dir, 'app.mapping.txt'),
+    });
+    expect(await symbolFiles(join(dir, 'other.apk'), join(dir, 'app.map'))).toEqual({
+      map: join(dir, 'app.map'),
+      r8: undefined,
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+test("simpleperf's start prints only its pid, and cleanup kills it only while the pid is still that session's", async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'doubletake-test-'));
+  const others: ReturnType<typeof spawn>[] = [];
+  try {
+    // A simpleperf that complains on both streams, then keeps running (as a shell, so its command line keeps the
+    // session's data path).
+    await writeFile(join(dir, 'simpleperf'), '#!/bin/sh\necho "diagnostic"\necho "warning" >&2\nsleep 5\n', {
+      mode: 0o755,
+    });
+    const env = `PATH=${dir}:$PATH; `;
+    const cmd = simpleperfCommand('com.example', dir, 'a');
+    const started = await background('sh', ['-c', env + cmd.start], 'simpleperf', 200);
+    const pid = Number(started.pid);
+    expect(Number((await readFile(cmd.files.pid, 'utf8')).trim())).toBe(pid);
+    expect(await readFile(cmd.files.log, 'utf8')).toContain('diagnostic');
+    await new Promise<void>((resolve) => {
+      started.child.once('close', () => resolve());
+      started.child.kill('SIGKILL');
+    });
+    // The host side is gone; the device side is still found through the pid file, and its files go.
+    expect(alive(pid)).toBe(true);
+    await run('sh', ['-c', cmd.kill]);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(alive(pid)).toBe(false);
+    expect(await readFile(cmd.files.pid, 'utf8').catch(() => 'gone')).toBe('gone');
+    // A stale pid file whose pid now belongs to another process: cleanup leaves that process alone.
+    const other = spawn('sleep', ['30']);
+    others.push(other);
+    const stale = simpleperfCommand('com.example', dir, 'b');
+    await writeFile(stale.files.pid, `${other.pid}\n`);
+    await run('sh', ['-c', stale.kill]);
+    expect(alive(other.pid ?? 0)).toBe(true);
+    expect(await readFile(stale.files.pid, 'utf8').catch(() => 'gone')).toBe('gone');
+    // A simpleperf that exits at once is refused.
+    await writeFile(join(dir, 'simpleperf'), '#!/bin/sh\necho "no permission"\nexit 1\n', { mode: 0o755 });
+    const refused = simpleperfCommand('com.example', dir, 'c');
+    expect(
+      await background('sh', ['-c', env + refused.start], 'simpleperf', 200).then(
+        () => 'started',
+        (error: unknown) => String(error),
+      ),
+    ).toContain('did not start');
+  } finally {
+    for (const o of others) o.kill('SIGKILL');
+    await rm(dir, { recursive: true, force: true });
+  }
 });

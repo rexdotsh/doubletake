@@ -9,6 +9,7 @@ import { isCount, metricInfo } from './metrics.ts';
 import { openProbe } from './adapter.ts';
 import { PROBE_METRICS, type ProbeDetail, typical } from './probe.ts';
 import { addByProgram, coresBetween, type Others, snapshot, summarize, watchOthers } from './host.ts';
+import { type ProfileSettings, profileCase } from './profile/session.ts';
 import { RecorderStuck, type RunResult, filmed, runOnce } from './run.ts';
 import { type Comparison, LOOKS, MIN_PAIRS, POCOCK_LEVEL, compare, median } from './stats.ts';
 import { type Experiment, type Series, type Variant, lockDevice, saveExperiment } from './store.ts';
@@ -34,6 +35,8 @@ export type BenchOptions = {
   video?: string;
   /** How long the experiment may wait for a quiet host in all, and how long it has. */
   queue: { budgetMs: number; waitedMs: number };
+  /** `--profile`: profiled blocks after each case's pairs (with `pairs: 0`, instead of them). */
+  profile?: ProfileSettings;
 };
 
 function caseOf(bench: Bench, name: string): Case {
@@ -378,7 +381,7 @@ async function benchLocked(o: BenchOptions): Promise<Experiment> {
   await saveExperiment(o.dir, o.experiment);
   await o.device.prepare();
   if (o.base.appId !== o.head.appId) await Promise.all([install(o, o.base), install(o, o.head)].map((p) => p));
-  for (const name of o.cases) {
+  for (const name of o.pairs === 0 && o.profile ? [] : o.cases) {
     try {
       o.experiment.series.push(await series(o, name));
     } catch (error) {
@@ -390,6 +393,10 @@ async function benchLocked(o: BenchOptions): Promise<Experiment> {
     }
     await saveExperiment(o.dir, o.experiment);
   }
+  await profiles(o, [o.base, o.head], async (v) => {
+    if (o.base.appId === o.head.appId) await install(o, v);
+    await quiet(o);
+  });
   o.experiment.decided = !o.experiment.refused_cases?.length && o.experiment.series.every((s) => s.primary.decided);
   if (o.video && o.experiment.refused_cases?.some((r) => r.case === o.video))
     o.log(`${o.video}: refused, so not filmed`);
@@ -399,6 +406,29 @@ async function benchLocked(o: BenchOptions): Promise<Experiment> {
   }
   await saveExperiment(o.dir, o.experiment);
   return o.experiment;
+}
+
+/** Profiled blocks per case not refused as a whole; a busy host costs that case's profiles, as it costs its pairs. */
+async function profiles(
+  o: Omit<BenchOptions, 'base' | 'pairs'>,
+  sides: BenchOptions['base'][],
+  prepare: (v: BenchOptions['base']) => Promise<void>,
+): Promise<void> {
+  if (!o.profile) return;
+  const settings = o.profile;
+  for (const name of o.cases) {
+    if (o.experiment.refused_cases?.some((r) => r.case === name)) continue;
+    try {
+      const got = await profileCase({ ...o, settings, prepare }, name, caseOf(o.bench, name), sides);
+      (o.experiment.profiles ??= []).push(...got.results);
+      if (got.refusals.length) (o.experiment.profile_refusals ??= []).push(...got.refusals);
+    } catch (error) {
+      if (!(error instanceof Refusal) || !CASE_REFUSALS.has(error.validator)) throw error;
+      o.log(`${name}: profiles refused (${error.validator}): ${error.message}`);
+      (o.experiment.profile_refusals ??= []).push({ case: name, reason: `${error.validator}: ${error.message}` });
+    }
+    await saveExperiment(o.dir, o.experiment);
+  }
 }
 
 export async function runCheck(o: Omit<BenchOptions, 'base' | 'pairs' | 'warmup'>): Promise<Experiment> {
@@ -455,5 +485,7 @@ async function check(o: Omit<BenchOptions, 'base' | 'pairs' | 'warmup'>): Promis
     // Saved after every case, so a check cut short keeps what it measured.
     await saveExperiment(o.dir, o.experiment);
   }
+  await profiles({ ...o, warmup: 0 }, [o.head], (v) => install(o, v));
+  await saveExperiment(o.dir, o.experiment);
   return o.experiment;
 }

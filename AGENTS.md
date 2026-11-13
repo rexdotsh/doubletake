@@ -31,6 +31,7 @@ src/stats.ts     paired differences, bootstrap interval, signed-rank p, verdicts
 src/report.ts    terminal text, markdown and the PR card
 src/probe.ts     the app probe's counts per window (renders, requests); cdp.ts and bridge.ts are its transports
 src/remote.ts    --host: ship the CLI and artifacts over SSH, run there, fetch the result
+src/profile/     --profile: recorders, Hermes/simpleperf/sample parsers, symbolication, diff, flame graph
 sdk/             the in-app SDK (zero dependencies, runs in Hermes)
 skill/           the agent skill
 test/            bun tests
