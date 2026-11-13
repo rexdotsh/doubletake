@@ -40,6 +40,8 @@ export interface LogTap {
 export interface Recording {
   /** Host clock of the video's first frame, when the platform says it (simctl does; screenrecord does not). */
   readonly startedAt?: number;
+  /** Host clock when the recorder started, when there is no exact one: its first frame comes up to ~0.3 s later. */
+  readonly startedNear?: number;
   /** Stops recording and returns the local path of the video. */
   stop(): Promise<string>;
 }

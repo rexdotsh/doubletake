@@ -5,7 +5,7 @@ import { Refusal } from './device.ts';
 import { countersIn, marksIn, ofProcess } from './events.ts';
 import { type FlowState, launch, runSteps } from './flow.ts';
 import { sleep } from './sh.ts';
-import { VIDEO_FPS, decodeFrames, visualTimes } from './visual.ts';
+import { type Region, VIDEO_FPS, decodeFrames, visualTimes } from './visual.ts';
 
 type RunValues = Record<string, number>;
 /** A run's recording, if filmed, and when its action began (host clock). */
@@ -98,15 +98,13 @@ async function analyseVideo(
   const frames = await decodeFrames(file);
   const seconds = frames.length / VIDEO_FPS;
   if (recording.startedAt === undefined) {
-    // No clock for the video's first frame: no launch.visual, and the clip starts at its first change.
-    if (launchCase)
-      refused['launch.visual'] = 'NoVideoClock: this recorder gives no start time to align the launch with';
-    try {
-      return { file, first: visualTimes(frames, bench.ignore, 0).first / 1000, seconds };
-    } catch (error) {
-      if (error instanceof Refusal) return { file, first: 0, seconds };
-      throw error;
-    }
+    // No exact clock for the video's first frame (Android's screenrecord): time from the first change, once the
+    // recorder's approximate start shows that change is the launch's (clockless).
+    const launchAt = recording.startedNear === undefined ? undefined : action - recording.startedNear;
+    const { first, visual, refusal } = clockless(frames, bench.ignore, launchCase, launchAt);
+    if (launchCase && visual !== undefined) values['launch.visual'] = visual;
+    if (launchCase && refusal) refused['launch.visual'] = refusal;
+    return { file, first, seconds };
   }
   const at = Math.max(0, action - recording.startedAt);
   try {
@@ -117,6 +115,42 @@ async function analyseVideo(
     if (launchCase) refused['launch.visual'] = `${error.validator}: ${error.message}`;
   }
   return { file, first: at / 1000, seconds };
+}
+
+/** How much earlier than the recorder's start says a launch's first change may show: its encoder start-up. */
+const RECORDER_SLACK_MS = 300;
+
+/**
+ * `launch.visual` from a clip without an exact start clock: from the first change (the launch's first visible
+ * response) to the frame after which the screen settles. `launchAt` (ms into the clip, from the recorder's
+ * approximate start) is where the launch was issued: a change more than the recorder's start-up before it is
+ * something else (an animated launcher, a widget), and the metric is refused rather than timed from it.
+ * `first` is where the clip's action starts, in seconds.
+ */
+export function clockless(
+  frames: readonly Uint8Array[],
+  ignore: readonly Region[] = [],
+  launchCase = true,
+  launchAt?: number,
+): { first: number; visual?: number; refusal?: string } {
+  try {
+    const visual = visualTimes(frames, ignore, launchCase ? 1000 : 0);
+    if (!launchCase) return { first: visual.first / 1000 };
+    if (launchAt === undefined)
+      return {
+        first: visual.first / 1000,
+        refusal: 'NoVideoClock: this recorder gives no start time to align the launch with',
+      };
+    if (visual.first < launchAt - RECORDER_SLACK_MS)
+      return {
+        first: visual.first / 1000,
+        refusal: `ChangeBeforeLaunch: the screen changed ${Math.round(visual.first)} ms into the recording, before the launch at ~${Math.round(launchAt)} ms`,
+      };
+    return { first: visual.first / 1000, visual: visual.complete - visual.first };
+  } catch (error) {
+    if (!(error instanceof Refusal)) throw error;
+    return { first: 0, refusal: `${error.validator}: ${error.message}` };
+  }
 }
 
 /** A cold launch: untimed setup, then the app is terminated and launched; times are from the process's start. */

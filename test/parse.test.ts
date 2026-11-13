@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { ms, validate } from '../src/bench.ts';
 import { countersIn, marksIn, parseSdkLine } from '../src/events.ts';
 import { psTime } from '../src/host.ts';
+import { clockless } from '../src/run.ts';
 import { visualTimes } from '../src/visual.ts';
 
 test('SDK lines parse whatever the logger put before them', () => {
@@ -88,4 +89,19 @@ test('visual times run from the first change to the last frame unlike the end', 
 test('a screen still changing at the end is refused', () => {
   const frames = Array.from({ length: 120 }, (_, i) => frame(i % 2 ? 0 : 255));
   expect(() => visualTimes(frames)).toThrow(/still changing/);
+});
+
+test('a clip without a start clock times launch.visual from its first change, if that is the launch', () => {
+  const still = new Uint8Array(72 * 156).fill(10);
+  const widget = new Uint8Array(72 * 156).fill(60);
+  const splash = new Uint8Array(72 * 156).fill(120);
+  const home = new Uint8Array(72 * 156).fill(220);
+  // 1.5 s still (90 frames), the launch issued at ~1500 ms, 0.5 s splash, then Home for 2 s.
+  const frames = [...Array(90).fill(still), ...Array(30).fill(splash), ...Array(120).fill(home)];
+  expect(clockless(frames, [], true, 1500)).toEqual({ first: 1.5, visual: 500 });
+  expect(clockless(frames.slice(0, 130), [], true, 1500).refusal).toMatch(/NotSettled/);
+  expect(clockless(frames).refusal).toMatch(/NoVideoClock/);
+  // A widget that changes at 800 ms, well before the launch: not timed from it.
+  const early = [...Array(48).fill(still), ...Array(42).fill(widget), ...frames.slice(90)];
+  expect(clockless(early, [], true, 1500).refusal).toMatch(/ChangeBeforeLaunch/);
 });
