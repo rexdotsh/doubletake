@@ -281,10 +281,12 @@ async function windowRun(
   const readAt = Date.now();
   const frames = await device.frames?.read(appId);
   const framesTo = (readAt + Date.now()) / 2;
-  const probed = probe?.ok ? await probeCall(() => ctx.probe?.read(), refused) : undefined;
+  const span = { from: start + ctx.offset, to: end + ctx.offset };
+  const probed = probe?.ok ? await probeCall(() => ctx.probe?.read(span), refused) : undefined;
   if (probed?.value) {
-    Object.assign(values, probeValues(probed.value.detail));
-    Object.assign(refused, probed.value.refused);
+    const got = probed.value;
+    for (const [m, v] of Object.entries(probeValues(got.detail))) if (!got.refused[m]) values[m] = v;
+    Object.assign(refused, got.refused);
   }
   values['cpu.time'] = cpu;
   if (c.idle) values['cpu.idle'] = cpu / ((end - start) / 1000);

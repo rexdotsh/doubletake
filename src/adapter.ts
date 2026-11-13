@@ -4,5 +4,5 @@ import type { Device } from './device.ts';
 import type { ProbeConfig, ProbeSession } from './probe.ts';
 
 export function openProbe(config: ProbeConfig, device: Device, appId: string): ProbeSession {
-  return 'cdp' in config ? cdpProbe(config.cdp, appId) : bridgeProbe(config.bridge, device);
+  return 'cdp' in config ? cdpProbe(config.cdp, appId, device.name) : bridgeProbe(config.bridge, device);
 }

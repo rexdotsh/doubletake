@@ -36,12 +36,18 @@ export function replyCollector(
   };
 }
 
-/** The device log's messages that contain `reply`, as they arrive. */
-function follow(device: Device, reply: string, onMessage: (message: string) => void) {
-  if (device.platform === 'android')
-    return stream('adb', ['-s', device.id, 'logcat', '-v', 'raw', '-T', '1'], onMessage);
+/** Streams the device log's messages that contain `reply`; returns its stop. */
+type BridgeDevice = Pick<Device, 'platform' | 'id' | 'openUrl'>;
+
+export type Follow = (device: BridgeDevice, reply: string, onMessage: (message: string) => void) => () => Promise<void>;
+
+const followLog: Follow = (device, reply, onMessage) => {
+  if (device.platform === 'android') {
+    const child = stream('adb', ['-s', device.id, 'logcat', '-v', 'raw', '-T', '1'], onMessage);
+    return () => stop(child);
+  }
   const predicate = `eventMessage CONTAINS "${reply.replaceAll('"', '\\"')}"`;
-  return stream(
+  const child = stream(
     'xcrun',
     ['simctl', 'spawn', device.id, 'log', 'stream', '--style', 'ndjson', '--level', 'debug', '--predicate', predicate],
     (line) => {
@@ -50,51 +56,72 @@ function follow(device: Device, reply: string, onMessage: (message: string) => v
       if (typeof message === 'string') onMessage(message);
     },
   );
-}
+  return () => stop(child);
+};
 
-async function call(config: BridgeConfig, device: Device, script: string): Promise<unknown> {
-  const nonce = randomBytes(6).toString('hex');
-  const collect = replyCollector(config.reply, nonce);
-  const answer = Promise.withResolvers<unknown>();
-  // Settled before it is awaited (a reply during the attach wait) must not read as unhandled.
-  answer.promise.catch(() => undefined);
-  const child = follow(device, config.reply, (message) => {
-    try {
-      const got = collect(message);
-      if (got) answer.resolve(got.value);
-    } catch (error) {
-      answer.reject(error);
+/**
+ * A bridge session: one log follower, attached at the first `begin` (before any window) and kept until `stop`,
+ * so a read goes out the moment the window ends. A `read` script with `{from}` and `{to}` gets the window's
+ * device-clock bounds and counts exactly it; otherwise the reply's span is checked against the window.
+ */
+export function bridgeProbe(config: BridgeConfig, device: BridgeDevice, follow: Follow = followLog): ProbeSession {
+  const listeners = new Set<(message: string) => void>();
+  let stopLog: (() => Promise<void>) | undefined;
+
+  const call = async (script: string): Promise<unknown> => {
+    if (!stopLog) {
+      stopLog = follow(device, config.reply, (message) => {
+        for (const listen of listeners) listen(message);
+      });
+      await sleep(ATTACH_MS);
     }
-  });
-  const timer = setTimeout(
-    () =>
-      answer.reject(
-        new Refusal('NoProbe', `no "${config.reply} ${nonce}" reply to "${script}" within ${REPLY_MS / 1000} s`),
-      ),
-    REPLY_MS,
-  );
-  try {
-    await sleep(ATTACH_MS);
-    await device.openUrl(config.link.replaceAll('{nonce}', nonce).replaceAll('{script}', encodeURIComponent(script)));
-    const value = await answer.promise;
-    if (dig(value, 'ok') === false)
-      throw new Refusal('NoProbe', `the bridge failed "${script}": ${JSON.stringify(value).slice(0, 200)}`);
-    return value;
-  } finally {
-    clearTimeout(timer);
-    await stop(child);
-  }
-}
+    const nonce = randomBytes(6).toString('hex');
+    const collect = replyCollector(config.reply, nonce);
+    const answer = Promise.withResolvers<unknown>();
+    // Settled before it is awaited must not read as unhandled.
+    answer.promise.catch(() => undefined);
+    const listen = (message: string) => {
+      try {
+        const got = collect(message);
+        if (got) answer.resolve(got.value);
+      } catch (error) {
+        answer.reject(error);
+      }
+    };
+    listeners.add(listen);
+    const timer = setTimeout(
+      () =>
+        answer.reject(
+          new Refusal('NoProbe', `no "${config.reply} ${nonce}" reply to "${script}" within ${REPLY_MS / 1000} s`),
+        ),
+      REPLY_MS,
+    );
+    try {
+      await device.openUrl(config.link.replaceAll('{nonce}', nonce).replaceAll('{script}', encodeURIComponent(script)));
+      const value = await answer.promise;
+      if (dig(value, 'ok') === false)
+        throw new Refusal('NoProbe', `the bridge failed "${script}": ${JSON.stringify(value).slice(0, 200)}`);
+      return value;
+    } finally {
+      clearTimeout(timer);
+      listeners.delete(listen);
+    }
+  };
 
-export function bridgeProbe(config: BridgeConfig, device: Device): ProbeSession {
   return {
     async begin() {
-      await call(config, device, config.begin);
+      await call(config.begin);
     },
-    async read() {
-      const reply = await call(config, device, config.read);
-      return readProbe(config.parse ? config.parse(reply) : reply);
+    async read(window) {
+      const script = config.read
+        .replaceAll('{from}', String(Math.round(window.from)))
+        .replaceAll('{to}', String(Math.round(window.to)));
+      const reply = await call(script);
+      return readProbe(config.parse ? config.parse(reply) : reply, window);
     },
-    async stop() {},
+    async stop() {
+      await stopLog?.();
+      stopLog = undefined;
+    },
   };
 }

@@ -111,8 +111,8 @@ export default {
 };
 ```
 
-- **`cdp`** (dev clients, dev-mode JS): before each window doubletake finds the app's runtime in Metro's `/json/list`, injects the probe with `Runtime.evaluate` (it wraps the DevTools hook React already reports to), and reads it after the window. Component names are the source's.
-- **`bridge`** (any build, release included): the app exposes a deep link that runs a script and answers in its log. The probe must be installed before React loads (`import { probe } from 'doubletake/sdk'; probe();` first in the entry file): React attaches to a DevTools hook only when it starts. The bridge's `begin` script calls `globalThis.__doubletake_probe__.begin()`, its `read` script answers with `globalThis.__doubletake_probe__.read()`. Release builds minify component names.
+- **`cdp`** (dev clients, dev-mode JS): before each window doubletake finds the app's runtime in Metro's `/json/list` (exactly the bench's app id, on the device under test; two devices running it are refused), injects the probe with `Runtime.evaluate` (it wraps the DevTools hook React already reports to), and reads the window after it. Component names are the source's.
+- **`bridge`** (any build, release included): the app exposes a deep link that runs a script and answers in its log. The probe must be installed before React loads (`import { probe } from 'doubletake/sdk'; probe();` first in the entry file): React attaches to a DevTools hook only when it starts. The bridge's `begin` script calls `globalThis.__doubletake_probe__.begin()`, its `read` script answers with `globalThis.__doubletake_probe__.read(from, to)`. Release builds minify component names.
 
 ```ts
 probe: {
@@ -120,19 +120,19 @@ probe: {
     link: 'myapp://debug?n={nonce}&c={script}', // {script} is URL-encoded
     reply: '[APP]', // the app logs `[APP] <nonce> <i>/<n> <json chunk>`, chunks of up to ~800 characters
     begin: 'probe begin',
-    read: 'probe read',
+    read: 'probe read {from} {to}', // the window, device clock (ms since the epoch)
     parse: (reply) => reply.result, // optional: where the counts are in the reply
   },
 },
 ```
 
-A reply with `ok: false` is a failure. The counts are the probe's record (`schema: 'doubletake.probe.v1'`: `ms`, `renderers`, `commits`, `renders`, `mounts`, `components: [[name, renders, mounts]]`, `requests: [{ method, url, query, body, status, bytes, start, headers, end }]` with query and body as hashes and times in ms from `begin`, `network`, `dropped`), or an aggregate a simpler bridge can give: `{ ms, commits, renders, renderers, requests, duplicates, bytes, top: [{ key, count }] }` (send `renderers`, the hook's attached renderers: without it, zero commits from a hook React never reached cannot be told from a screen that did not render); a field it lacks is refused (`NoProbe`), never zero.
+A reply with `ok: false` is a failure. The probe keeps every commit and request with its time, and `read(from, to)` counts only those inside the window, so the link's latency after the window is not counted. The counts are the probe's record (`schema: 'doubletake.probe.v1'`: `from`, `to`, `ms`, `renderers`, `commits`, `renders`, `mounts`, `components: [[name, renders, mounts]]`, `requests: [{ method, url, query, body, status, bytes, start, headers, end }]` with query and body as hashes and times in ms from `from`, `network`, `dropped`, `droppedCommits`), or an aggregate a simpler bridge can give: `{ ms, commits, renders, renderers, requests, duplicates, bytes, top: [{ key, count }] }` (send `renderers`, the hook's attached renderers: without it, zero commits from a hook React never reached cannot be told from a screen that did not render); a field it lacks is refused (`NoProbe`), never zero. Counts are refused, never short: a record with unreadable request entries (`InvalidProbe`) or past its caps (`Overflow`: 2,000 requests, 5,000 commits), duplicates when a body could not be fingerprinted (`UnknownBody`), and everything when the app's span is off the window by more than 300 ms or 5% (`WindowOverrun`: an aggregate's `ms`, or a record read without `{from}` and `{to}`) or unknown (`NoWindow`).
 
 What it sees and what it does not:
 
 - A component render is a function, class, forwardRef or memo component that React rendered in a commit (React DevTools' rule: a mount, or `PerformedWork` on a fiber whose subtree was not bailed out of). Mounts are counted and shown apart: the re-render list is renders minus mounts.
-- Requests are XMLHttpRequest, so `fetch` in React Native, started inside the window. Images and native SDKs' own requests are not seen. A duplicate repeats an earlier request in the window: same method, URL, query and body.
-- The probe costs a walk of each commit's rendered fibers: timing metrics in a probe case read the app with it on. Opening a bridge's link before and after the window can wake the app; CDP does not.
+- Requests are XMLHttpRequest, so `fetch` in React Native, started inside the window. Images and native SDKs' own requests are not seen. A duplicate repeats an earlier request in the window: same method, URL, query and body (text and byte bodies hashed, React Native's FormData by its parts; any other body is unknown). Bytes are Content-Length, else the body's UTF-8 size; a request still in flight at the window's end has none.
+- The probe costs a walk of each commit's rendered fibers: timing metrics in a probe case read the app with it on. Opening a bridge's link before and after the window can wake the app (the bridge's log follower attaches once, before the first window); CDP does not.
 - `report` adds a section per case: the counts, the components that re-rendered most, duplicate requests, and a request waterfall (in a bench, each side's run with the median renders, and the components whose renders changed most). The counts get verdicts as any metric (counts that every run read the same compare exactly).
 
 ## Metrics

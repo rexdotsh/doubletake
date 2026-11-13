@@ -1,12 +1,16 @@
-import { expect, test } from 'bun:test';
+import { afterEach, expect, setSystemTime, test } from 'bun:test';
+import { createServer } from 'node:http';
 import { installProbe } from '../sdk/probe.ts';
 import { validate } from '../src/bench.ts';
-import { replyCollector } from '../src/bridge.ts';
-import { pickTarget } from '../src/cdp.ts';
+import { bridgeProbe, replyCollector } from '../src/bridge.ts';
+import { cdpProbe, connect, pickTarget } from '../src/cdp.ts';
 import { probeConfig, readProbe, typical } from '../src/probe.ts';
 import { probeCard, probeText, waterfall } from '../src/probe-report.ts';
 import { card, summary } from '../src/report.ts';
 import type { Experiment } from '../src/store.ts';
+import { dig } from '../src/util.ts';
+
+afterEach(() => void setSystemTime());
 
 type Fiber = {
   tag: number;
@@ -102,7 +106,7 @@ test('the probe counts commits and the components each one rendered, as DevTools
   hook.onCommitFiberRoot(1, { current: root2 });
   // A commit whose root kept its child: nothing below rendered.
   hook.onCommitFiberRoot(1, { current: { ...fiber(3, null, 0, app2), alternate: { ...root2 } } });
-  const read = probe.read();
+  const read = probe.read(0, Date.now() + 1000);
   expect(commits).toHaveLength(4);
   expect(read.commits).toBe(3);
   expect(read.renderers).toBe(1);
@@ -115,7 +119,7 @@ test('the probe counts commits and the components each one rendered, as DevTools
   expect([read.renders, read.mounts]).toEqual([5, 4]);
   // Closed: later commits do not count, and reading again gives the same window.
   hook.onCommitFiberRoot(1, { current: root2 });
-  expect(probe.read().commits).toBe(3);
+  expect(probe.read(0, Date.now() + 1000).commits).toBe(3);
 });
 
 test('the probe lists requests with hashes for query and body, timing and size', () => {
@@ -137,8 +141,8 @@ test('the probe lists requests with hashes for query and body, timing and size',
   expect(read.requests[0]?.end).toBeNumber();
   expect(read.requests[3]?.end).toBeUndefined();
   expect(read.network).toBe(true);
-  const { detail, refused } = readProbe(read);
-  expect(detail).toMatchObject({ requests: 4, duplicates: 1, bytes: 304, commits: 0 });
+  const { detail, refused } = readProbe(read, { from: read.from, to: read.to });
+  expect(detail).toMatchObject({ requests: 4, duplicates: 1, bytes: 304, commits: 0, overrun: 0 });
   expect(detail.keys?.[0]).toEqual({ key: 'GET https://api.example/v1/me', count: 2, bytes: 240 });
   expect(refused).toEqual({});
 });
@@ -151,31 +155,182 @@ test('the probe runs from its source text alone, as CDP injects it, and installs
   expect(Reflect.get(g, '__REACT_DEVTOOLS_GLOBAL_HOOK__')).toBeObject();
   const again = installProbe(g);
   again.begin();
-  const { refused } = readProbe(again.read());
+  const read = again.read();
+  const { refused } = readProbe(read, { from: read.from, to: read.to });
   // A hook made after React started has no renderer: commits are refused, not zero.
   expect(refused['probe.commits']).toStartWith('NoRenderer');
   expect(refused['probe.requests']).toBeUndefined();
 });
 
 test('a bridge may give only aggregates; whatever is missing is refused', () => {
-  const { detail, refused } = readProbe({
-    requests: 5,
-    duplicates: 2,
-    bytes: 900,
-    top: [{ key: 'GET /a', count: 3 }],
-    commits: 7,
-    renders: 40,
-    ms: 1200,
-  });
-  expect(detail).toMatchObject({ ms: 1200, requests: 5, duplicates: 2, commits: 7, renders: 40 });
+  const window = { from: 10_000, to: 11_200 };
+  const { detail, refused } = readProbe(
+    { requests: 5, duplicates: 2, bytes: 900, top: [{ key: 'GET /a', count: 3 }], commits: 7, renders: 40, ms: 1250 },
+    window,
+  );
+  expect(detail).toMatchObject({ ms: 1250, requests: 5, duplicates: 2, commits: 7, renders: 40, overrun: 50 });
   expect(detail.keys).toEqual([{ key: 'GET /a', count: 3, bytes: 0 }]);
   expect(refused).toEqual({});
-  expect(readProbe({ requests: 2 }).refused['probe.renders']).toStartWith('NoProbe');
-  expect(readProbe({ commits: 0, renders: 0, renderers: 0 }).refused['probe.commits']).toStartWith('NoRenderer');
-  expect(Object.keys(readProbe(null).refused)).toHaveLength(5);
-  expect(readProbe({ schema: 'doubletake.probe.v1', renderers: 1, network: false }).refused['probe.bytes']).toStartWith(
-    'NoNetwork',
+  expect(readProbe({ requests: 2, ms: 1200 }, window).refused['probe.renders']).toStartWith('NoProbe');
+  expect(readProbe({ renderers: 0, ms: 1200 }, window).refused['probe.commits']).toStartWith('NoRenderer');
+  expect(Object.keys(readProbe(null, window).refused)).toHaveLength(5);
+  // No span to check against the window, or one too far off it: nothing is trusted.
+  expect(readProbe({ requests: 2 }, window).refused['probe.requests']).toStartWith('NoWindow');
+  const late = readProbe({ requests: 9, duplicates: 0, bytes: 1, commits: 1, renders: 1, ms: 2500 }, window);
+  expect(Object.keys(late.refused)).toHaveLength(5);
+  expect(late.refused['probe.requests']).toStartWith('WindowOverrun');
+  expect(late.detail.requests).toBeUndefined();
+});
+
+const record = (extra: object) => ({
+  schema: 'doubletake.probe.v1',
+  from: 0,
+  to: 1000,
+  ms: 1000,
+  renderers: 1,
+  commits: 2,
+  renders: 3,
+  mounts: 0,
+  components: [['A', 3, 0]],
+  requests: [{ method: 'GET', url: '/a', query: '', body: '', status: 200, bytes: 5, start: 1, end: 9 }],
+  network: true,
+  dropped: 0,
+  droppedCommits: 0,
+  ...extra,
+});
+
+test("the probe's record is complete or refused: lists, entries, caps", () => {
+  const window = { from: 0, to: 1000 };
+  expect(readProbe(record({}), window).refused).toEqual({});
+  const why = (extra: object, metric: string) => readProbe(record(extra), window).refused[metric] ?? '';
+  expect(why({ network: false }, 'probe.bytes')).toStartWith('NoNetwork');
+  expect(why({ requests: undefined }, 'probe.requests')).toStartWith('InvalidProbe: no request list');
+  expect(why({ requests: [{ method: 'GET' }, { method: 'GET', url: '/', start: 0 }] }, 'probe.duplicates')).toStartWith(
+    'InvalidProbe: 1 of 2',
   );
+  expect(why({ dropped: 2 }, 'probe.requests')).toStartWith('Overflow');
+  expect(why({ dropped: undefined }, 'probe.bytes')).toStartWith('Overflow');
+  expect(why({ droppedCommits: 1 }, 'probe.renders')).toStartWith('Overflow');
+  expect(why({ renderers: undefined }, 'probe.commits')).toStartWith('InvalidProbe');
+  expect(why({ requests: [{ method: 'POST', url: '/', body: '?', start: 0 }] }, 'probe.duplicates')).toStartWith(
+    'UnknownBody',
+  );
+  expect(why({ requests: [{ method: 'POST', url: '/', body: '?', start: 0 }] }, 'probe.requests')).toBe('');
+});
+
+test('the probe counts only what happened inside the window it is asked for', () => {
+  const { g, hook } = app();
+  const probe = installProbe(g);
+  setSystemTime(new Date(1000));
+  probe.begin();
+  request(g, 'get', '/before').finish(200, 'x');
+  hook.onCommitFiberRoot(1, { current: fiber(3, null, 0, fiber(0, App)) });
+  setSystemTime(new Date(2000));
+  const inside = request(g, 'get', '/inside');
+  hook.onCommitFiberRoot(1, { current: fiber(3, null, 0, fiber(0, App)) });
+  setSystemTime(new Date(2500));
+  request(g, 'get', '/done').finish(200, 'é€😀');
+  setSystemTime(new Date(3500));
+  inside.finish(200, 'late');
+  request(g, 'get', '/after');
+  hook.onCommitFiberRoot(1, { current: fiber(3, null, 0, fiber(0, App)) });
+  const read = probe.read(2000, 3000);
+  expect([read.from, read.to, read.ms, read.commits, read.renders]).toEqual([2000, 3000, 1000, 1, 1]);
+  expect(read.requests).toEqual([
+    {
+      method: 'GET',
+      url: '/inside',
+      query: '',
+      body: '',
+      status: 0,
+      bytes: 0,
+      start: 0,
+      headers: undefined,
+      end: undefined,
+    },
+    // UTF-8: é 2 bytes, € 3, 😀 4.
+    { method: 'GET', url: '/done', query: '', body: '', status: 200, bytes: 9, start: 500, headers: 500, end: 500 },
+  ]);
+});
+
+const formData = (parts: unknown[]) => ({ getParts: () => parts });
+
+test('request bodies are told apart by content; one the probe cannot read refuses duplicates', () => {
+  const { g } = app();
+  const probe = installProbe(g);
+  probe.begin();
+  for (const body of [
+    new Uint8Array([1, 2]),
+    new Uint8Array([1, 3]),
+    new Uint8Array([9, 1, 3]).subarray(1),
+    new Uint8Array([1, 2]).buffer,
+    formData([{ string: 'a' }]),
+    formData([{ string: 'b' }]),
+  ])
+    request(g, 'post', '/upload', body).finish(200, '');
+  const read = probe.read(0, Date.now() + 1);
+  expect(read.requests.map((r) => r.body)).toEqual([
+    expect.stringMatching(/^2\./),
+    expect.stringMatching(/^2\./),
+    read.requests[1]?.body,
+    read.requests[0]?.body,
+    expect.any(String),
+    expect.any(String),
+  ]);
+  expect(new Set(read.requests.map((r) => r.body)).size).toBe(4);
+  expect(readProbe(read, { from: read.from, to: read.to }).detail.duplicates).toBe(2);
+  request(g, 'post', '/upload', { size: 3 });
+  probe.begin();
+  request(g, 'post', '/upload', { size: 3 }).finish(200, '');
+  request(g, 'post', '/upload', { size: 4 }).finish(200, '');
+  const blobs = probe.read(0, Date.now() + 1);
+  expect(blobs.requests.map((r) => r.body)).toEqual(['?', '?']);
+  expect(readProbe(blobs, { from: blobs.from, to: blobs.to }).refused['probe.duplicates']).toStartWith('UnknownBody');
+});
+
+test('a bridge keeps one log follower for its session and reads the window it is given', async () => {
+  let follows = 0;
+  let deliver: ((message: string) => void) | undefined;
+  const opened: string[] = [];
+  const device = {
+    platform: 'android' as const,
+    id: 'emu',
+    async openUrl(url: string) {
+      opened.push(url);
+      const query = new URL(url).searchParams;
+      const script = query.get('c') ?? '';
+      const reply = script.startsWith('read')
+        ? { ok: true, steps: [{ value: { requests: 1, duplicates: 0, bytes: 2, commits: 3, renders: 4, ms: 1000 } }] }
+        : { ok: true };
+      queueMicrotask(() => deliver?.(`I ReactNativeJS: [APP] ${query.get('n')} 1/1 ${JSON.stringify(reply)}`));
+    },
+  };
+  const bridge = bridgeProbe(
+    {
+      link: 'app://lab?n={nonce}&c={script}',
+      reply: '[APP]',
+      begin: 'begin',
+      read: 'read {from} {to}',
+      parse: (r) => dig(r, 'steps', 0, 'value'),
+    },
+    device,
+    (_device, _reply, onMessage) => {
+      follows++;
+      deliver = onMessage;
+      return async () => {};
+    },
+  );
+  await bridge.begin();
+  const started = Date.now();
+  const { detail, refused } = await bridge.read({ from: 5000, to: 6000 });
+  expect(Date.now() - started).toBeLessThan(500);
+  expect(follows).toBe(1);
+  expect(decodeURIComponent(opened[1] ?? '')).toContain('read 5000 6000');
+  expect(detail).toMatchObject({ requests: 1, commits: 3, overrun: 0 });
+  expect(refused).toEqual({});
+  await bridge.begin();
+  expect(follows).toBe(1);
+  await bridge.stop();
 });
 
 test('a bridge reply is put together from its chunks, in any order', () => {
@@ -186,16 +341,68 @@ test('a bridge reply is put together from its chunks, in any order', () => {
   expect(() => replyCollector('[APP]', 'x')('[APP] x 1/1 {oops')).toThrow('not JSON');
 });
 
-test('the newest runtime of the app is the CDP target', () => {
-  const list = [
-    { appId: 'com.example.app', webSocketDebuggerUrl: 'ws://old' },
-    { description: 'com.other', webSocketDebuggerUrl: 'ws://other' },
-    { description: 'com.example.app', webSocketDebuggerUrl: 'ws://new' },
-    { appId: 'com.example.app' },
+const page = (appId: string, deviceName: string, url: string, logical = deviceName) => ({
+  appId,
+  deviceName,
+  webSocketDebuggerUrl: url,
+  reactNative: { logicalDeviceId: logical },
+});
+
+test('the CDP target is exactly the app, on exactly this device, and only one', () => {
+  const emulator = 'sdk_phone (emulator)';
+  expect(pickTarget([page('com.app', 'sdk_phone - 16 - API 36', 'ws://1')], 'com.app', emulator)).toEqual({
+    url: 'ws://1',
+  });
+  // Another app whose id starts with this one's is not it.
+  expect(pickTarget([page('com.app.preview', 'sdk_phone - 16 - API 36', 'ws://p')], 'com.app', emulator)).toEqual({
+    refusal: 'no runtime of com.app (1 listed)',
+  });
+  // The app on another device only.
+  expect(pickTarget([page('com.app', 'Pixel 9 - 16 - API 36', 'ws://o')], 'com.app', emulator)).toEqual({
+    refusal: 'com.app runs on Pixel 9 - 16 - API 36, not sdk_phone (emulator)',
+  });
+  // Two emulators of one model: refused, never the last one listed.
+  const two = [
+    page('com.app', 'sdk_phone - 16 - API 36', 'ws://a', 'a'),
+    page('com.app', 'sdk_phone - 16 - API 36', 'ws://b', 'b'),
   ];
-  expect(pickTarget(list, 'com.example.app')).toBe('ws://new');
-  expect(pickTarget(list, 'com.none')).toBeUndefined();
-  expect(pickTarget({}, 'x')).toBeUndefined();
+  expect(pickTarget(two, 'com.app', emulator)).toEqual({
+    refusal: '2 devices run com.app as sdk_phone (emulator): stop the others or use one Metro per device',
+  });
+  // One device listing a legacy page beside the current one: the current one.
+  const legacy = { description: 'com.app', deviceName: 'iPhone 17', webSocketDebuggerUrl: 'ws://legacy' };
+  expect(pickTarget([page('com.app', 'iPhone 17', 'ws://new'), legacy], 'com.app', 'iPhone 17')).toEqual({
+    url: 'ws://new',
+  });
+  expect(pickTarget({}, 'x', 'y')).toEqual({ refusal: "Metro's /json/list is not a list" });
+});
+
+const failed = (p: Promise<unknown>) =>
+  p.then(
+    () => 'resolved',
+    (error: unknown) => String(error),
+  );
+
+test('CDP gives up on a Metro or a runtime that never answers, by its deadlines', async () => {
+  const server = createServer(() => {});
+  server.on('upgrade', () => {});
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const address = server.address();
+  const port = typeof address === 'object' && address ? address.port : 0;
+  const d = { find: 400, fetch: 100, connect: 200, call: 200 };
+  try {
+    let started = Date.now();
+    expect(await failed(connect(`ws://127.0.0.1:${port}/x`, d))).toContain('no handshake within 0.2 s');
+    expect(Date.now() - started).toBeLessThan(1500);
+    started = Date.now();
+    expect(await failed(cdpProbe(`http://127.0.0.1:${port}`, 'com.app', 'emu', d).begin())).toContain(
+      'no runtime to probe',
+    );
+    expect(Date.now() - started).toBeLessThan(2500);
+  } finally {
+    server.closeAllConnections();
+    server.close();
+  }
 });
 
 test('bench files declare where probe metrics come from', () => {

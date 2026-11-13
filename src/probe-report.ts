@@ -82,7 +82,9 @@ export function waterfall(requests: readonly ProbeRequest[], ms: number): string
 }
 
 function details({ base, head }: Sides, indent: string): string[] {
-  const lines = [`${indent}${counts({ base, head })}`];
+  const off = Math.max(base?.overrun ?? 0, head?.overrun ?? 0);
+  const lines = [`${indent}${counts({ base, head }) || 'no counts (refused: see the metrics)'}`];
+  if (off) lines.push(`${indent}the app counted a span ${off} ms off the measured window`);
   const sides: [string, ProbeDetail][] =
     base && head
       ? [

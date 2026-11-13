@@ -8,68 +8,114 @@ import { isRecord } from './util.ts';
 // The probe over CDP, for dev clients: Metro's inspector proxy lists the app's JS runtimes, and the probe goes
 // in with Runtime.evaluate. A dev build's React reports to DevTools' hook, which the probe wraps at any time.
 
-type Target = { url: string; appId: string };
+/** Every step has a deadline: a just-launched app may take this long to show up in Metro's list. */
+export type Deadlines = { find: number; fetch: number; connect: number; call: number };
+const DEADLINES: Deadlines = { find: 20_000, fetch: 5000, connect: 10_000, call: 15_000 };
 
-/** How long a just-launched app may take to show up in Metro's list. */
-const FIND_MS = 20_000;
-const CALL_MS = 15_000;
+/**
+ * Metro's name for `device`: Android lists the model (`<model> - <release> - API <n>`), iOS the simulator's name.
+ * Ours is the model or the simulator's name, with ` (emulator)` after an emulator's model.
+ */
+const sameDevice = (listed: string, device: string) => {
+  const base = device.replace(/ \(emulator\)$/, '');
+  return listed === base || listed.startsWith(`${base} - `);
+};
 
-/** The newest debuggable runtime of `appId` in Metro's `/json/list`. */
-export function pickTarget(list: unknown, appId: string): string | undefined {
-  if (!Array.isArray(list)) return undefined;
-  const targets: Target[] = list.filter(isRecord).flatMap((t) => {
-    const url = t.webSocketDebuggerUrl;
-    if (typeof url !== 'string') return [];
-    const id = [t.appId, t.description, t.title].find((v): v is string => typeof v === 'string' && v.includes(appId));
-    return id === undefined ? [] : [{ url, appId: id }];
-  });
-  return targets.at(-1)?.url;
+function deviceOf(t: Record<string, unknown>): string {
+  const logical = isRecord(t.reactNative) ? t.reactNative.logicalDeviceId : undefined;
+  return String(logical ?? t.deviceName ?? t.id);
 }
 
-async function find(metro: string, appId: string): Promise<string> {
-  const end = Date.now() + FIND_MS;
-  let seen = 'nothing';
+/**
+ * The runtime of exactly `appId` on `device` in Metro's `/json/list`, or why there is none to trust: another
+ * device's runtime of the same app, or two devices' runtimes, would measure the wrong app.
+ */
+export function pickTarget(list: unknown, appId: string, device: string): { url: string } | { refusal: string } {
+  if (!Array.isArray(list)) return { refusal: "Metro's /json/list is not a list" };
+  const mine = list.filter(isRecord).filter((t) => t.appId === appId || t.description === appId);
+  const withUrl = mine.filter((t) => typeof t.webSocketDebuggerUrl === 'string');
+  const named = withUrl.filter((t) => typeof t.deviceName === 'string');
+  const here = named.length ? named.filter((t) => sameDevice(String(t.deviceName), device)) : withUrl;
+  if (!here.length)
+    return {
+      refusal: withUrl.length
+        ? `${appId} runs on ${[...new Set(named.map((t) => String(t.deviceName)))].join(', ')}, not ${device}`
+        : `no runtime of ${appId} (${list.length} listed)`,
+    };
+  const devices = new Set(here.map(deviceOf));
+  if (devices.size > 1)
+    return {
+      refusal: `${devices.size} devices run ${appId} as ${device}: stop the others or use one Metro per device`,
+    };
+  // One device can list a legacy page beside the current one: the current one carries `reactNative`.
+  const modern = here.filter((t) => isRecord(t.reactNative));
+  const target = (modern.length ? modern : here).at(-1);
+  return { url: String(target?.webSocketDebuggerUrl) };
+}
+
+async function find(metro: string, appId: string, device: string, d: Deadlines): Promise<string> {
+  const end = Date.now() + d.find;
   for (;;) {
-    const list: unknown = await fetch(`${metro}/json/list`)
-      .then((r) => r.json())
-      .catch((error: unknown) => {
-        seen = error instanceof Error ? error.message : String(error);
-        return [];
-      });
-    const url = pickTarget(list, appId);
-    if (url) return url;
-    if (Array.isArray(list)) seen = `${list.length} runtime(s), none of ${appId}`;
-    if (Date.now() > end)
-      throw new Refusal('NoProbe', `no ${appId} runtime on Metro at ${metro} within ${FIND_MS / 1000} s (${seen})`);
+    let why: string;
+    try {
+      const response = await fetch(`${metro}/json/list`, { signal: AbortSignal.timeout(d.fetch) });
+      const picked = pickTarget(await response.json(), appId, device);
+      if ('url' in picked) return picked.url;
+      why = picked.refusal;
+    } catch (error) {
+      why = error instanceof Error ? error.message : String(error);
+    }
+    if (Date.now() + 500 > end)
+      throw new Refusal('NoProbe', `no runtime to probe on Metro at ${metro} within ${d.find / 1000} s: ${why}`);
     await sleep(500);
   }
 }
 
 type Socket = { evaluate(expression: string): Promise<unknown>; close(): void };
 
-async function connect(url: string): Promise<Socket> {
+export async function connect(url: string, d: Deadlines = DEADLINES): Promise<Socket> {
   const ws = new WebSocket(url);
-  const pending = new Map<number, (message: Record<string, unknown>) => void>();
+  const pending = new Map<number, { resolve(m: Record<string, unknown>): void; reject(e: Error): void }>();
   let next = 0;
   ws.addEventListener('message', (event) => {
     const message: unknown = typeof event.data === 'string' ? JSON.parse(event.data) : undefined;
-    if (isRecord(message) && typeof message.id === 'number') pending.get(message.id)?.(message);
+    if (isRecord(message) && typeof message.id === 'number') pending.get(message.id)?.resolve(message);
+  });
+  ws.addEventListener('close', () => {
+    for (const p of pending.values()) p.reject(new Refusal('NoProbe', `the app's runtime closed ${url}`));
+    pending.clear();
   });
   await new Promise<void>((resolve, reject) => {
-    ws.addEventListener('open', () => resolve());
-    ws.addEventListener('error', () => reject(new Refusal('NoProbe', `cannot connect to ${url}`)));
+    const fail = (why: string) => {
+      clearTimeout(timer);
+      ws.close();
+      reject(new Refusal('NoProbe', `cannot connect to ${url}: ${why}`));
+    };
+    const timer = setTimeout(() => fail(`no handshake within ${d.connect / 1000} s`), d.connect);
+    ws.addEventListener('open', () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    ws.addEventListener('error', () => fail('connection error'));
+    ws.addEventListener('close', () => fail('closed'));
   });
   const call = (method: string, params: object) =>
     new Promise<Record<string, unknown>>((resolve, reject) => {
       const id = ++next;
       const timer = setTimeout(() => {
         pending.delete(id);
-        reject(new Refusal('NoProbe', `${method} got no answer within ${CALL_MS / 1000} s`));
-      }, CALL_MS);
-      pending.set(id, (message) => {
-        clearTimeout(timer);
-        pending.delete(id);
-        resolve(message);
+        reject(new Refusal('NoProbe', `${method} got no answer within ${d.call / 1000} s`));
+      }, d.call);
+      pending.set(id, {
+        resolve: (message) => {
+          clearTimeout(timer);
+          pending.delete(id);
+          resolve(message);
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
       });
       ws.send(JSON.stringify({ id, method, params }));
     });
@@ -88,23 +134,27 @@ async function connect(url: string): Promise<Socket> {
 
 // The probe's source as one expression; JSON keeps the reply a plain string through any CDP serializer.
 const INSTALL = `(${installProbe.toString()})(globalThis).begin()`;
-const READ = `JSON.stringify(globalThis.__doubletake_probe__ ? globalThis.__doubletake_probe__.read() : null)`;
+const read = (from: number, to: number) =>
+  `JSON.stringify(globalThis.__doubletake_probe__ ? globalThis.__doubletake_probe__.read(${from}, ${to}) : null)`;
 
-export function cdpProbe(metro: string, appId: string): ProbeSession {
+export function cdpProbe(metro: string, appId: string, device: string, d: Deadlines = DEADLINES): ProbeSession {
   let socket: Socket | undefined;
   return {
     async begin() {
       socket?.close();
       // The runtime changes with every launch: find it for each window.
-      socket = await connect(await find(metro, appId));
+      socket = await connect(await find(metro, appId, device, d), d);
       await socket.evaluate(INSTALL);
     },
-    async read() {
+    async read(window) {
       if (!socket) throw new Error('probe read before begin');
-      const text = await socket.evaluate(READ);
-      socket.close();
-      socket = undefined;
-      return readProbe(typeof text === 'string' ? JSON.parse(text) : undefined);
+      try {
+        const text = await socket.evaluate(read(Math.round(window.from), Math.round(window.to)));
+        return readProbe(typeof text === 'string' ? JSON.parse(text) : undefined, window);
+      } finally {
+        socket.close();
+        socket = undefined;
+      }
     },
     async stop() {
       socket?.close();
