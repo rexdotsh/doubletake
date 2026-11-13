@@ -390,25 +390,48 @@ export async function runCheck(o: Omit<BenchOptions, 'base' | 'pairs' | 'warmup'
   }
 }
 
+/**
+ * One case of a check. A check answers "does each case work, and what does it read?", so a case that fails is
+ * recorded (refused on its primary, with the error) and the next case still runs.
+ */
+export async function checkCase(
+  primary: string,
+  measure: () => Promise<{ values: Record<string, number>; refused: Record<string, string> }>,
+): Promise<{ values: Record<string, number>; refused: Record<string, string> }> {
+  try {
+    return await measure();
+  } catch (error) {
+    const why =
+      error instanceof Refusal
+        ? `${error.validator}: ${error.message}`
+        : `Failed: ${error instanceof Error ? error.message : String(error)}`;
+    return { values: {}, refused: { [primary]: why } };
+  }
+}
+
 async function check(o: Omit<BenchOptions, 'base' | 'pairs' | 'warmup'>): Promise<Experiment> {
   await saveExperiment(o.dir, o.experiment);
   await o.device.prepare();
   for (const name of o.cases) {
     const c = caseOf(o.bench, name);
-    // A check decides nothing, so a busy host is a warning on its values, never a wait or a refusal.
-    await install(o, o.head);
-    const { result: b, others } = await watched(o, { case: name, block: 'check', role: o.head.role }, () =>
-      measureBlock({ ...o, base: o.head, pairs: 1, warmup: 0, runs: 1 }, name, { ...c, runs: 1 }, o.head, 'check'),
-    );
-    if (others.busiest > limit())
-      o.experiment.warnings.push(
-        `${name}: other processes used ${others.busiest.toFixed(1)} of ${cpus().length} cores for 5 s during it (${busyWith(others.busiestTop)}): values from a busy machine`,
+    const b = await checkCase(c.primary, async () => {
+      await install(o, o.head);
+      const { result, others } = await watched(o, { case: name, block: 'check', role: o.head.role }, () =>
+        measureBlock({ ...o, base: o.head, pairs: 1, warmup: 0, runs: 1 }, name, { ...c, runs: 1 }, o.head, 'check'),
       );
+      // A check decides nothing, so a busy host is a warning on its values, never a wait or a refusal.
+      if (others.busiest > limit())
+        o.experiment.warnings.push(
+          `${name}: other processes used ${others.busiest.toFixed(1)} of ${cpus().length} cores for 5 s during it (${busyWith(others.busiestTop)}): values from a busy machine`,
+        );
+      return result;
+    });
     o.experiment.checks.push({ case: name, values: b.values, refused: b.refused });
     o.log(
       `${name}: ${Object.keys(b.refused).includes(c.primary) ? `refused: ${b.refused[c.primary]}` : `${c.primary} ${fmt(b.values[c.primary])}`}`,
     );
+    // Saved after every case, so a check cut short keeps what it measured.
+    await saveExperiment(o.dir, o.experiment);
   }
-  await saveExperiment(o.dir, o.experiment);
   return o.experiment;
 }
