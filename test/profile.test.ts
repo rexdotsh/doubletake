@@ -1,4 +1,5 @@
 import { expect, test } from 'bun:test';
+import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -478,39 +479,59 @@ test('symbol files are found beside a build, or taken as given', async () => {
   }
 });
 
-test("simpleperf's start prints only its pid, so a diagnostic cannot hide it, and the pid file always kills it", async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'doubletake-test-'));
+function alive(pid: number): boolean {
   try {
-    // A simpleperf that complains on both streams, then keeps running.
-    await writeFile(join(dir, 'simpleperf'), '#!/bin/sh\necho "diagnostic"\necho "warning" >&2\nexec sleep 30\n', {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+test("simpleperf's start prints only its pid, and cleanup kills it only while the pid is still that session's", async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'doubletake-test-'));
+  const others: ReturnType<typeof spawn>[] = [];
+  try {
+    // A simpleperf that complains on both streams, then keeps running (as a shell, so its command line keeps the
+    // session's data path).
+    await writeFile(join(dir, 'simpleperf'), '#!/bin/sh\necho "diagnostic"\necho "warning" >&2\nsleep 5\n', {
       mode: 0o755,
     });
-    const cmd = simpleperfCommand('com.example', dir);
     const env = `PATH=${dir}:$PATH; `;
+    const cmd = simpleperfCommand('com.example', dir, 'a');
     const started = await background('sh', ['-c', env + cmd.start], 'simpleperf', 200);
     const pid = Number(started.pid);
     expect(Number((await readFile(cmd.files.pid, 'utf8')).trim())).toBe(pid);
     expect(await readFile(cmd.files.log, 'utf8')).toContain('diagnostic');
-    expect(() => process.kill(pid, 0)).not.toThrow();
     await new Promise<void>((resolve) => {
       started.child.once('close', () => resolve());
       started.child.kill('SIGKILL');
     });
-    // The host side is gone; the device side is still found through the pid file.
+    // The host side is gone; the device side is still found through the pid file, and its files go.
+    expect(alive(pid)).toBe(true);
     await run('sh', ['-c', cmd.kill]);
     await new Promise((resolve) => setTimeout(resolve, 100));
-    expect(() => process.kill(pid, 0)).toThrow();
-    // A simpleperf that exits at once is refused, and the pid file it left is still cleaned up.
+    expect(alive(pid)).toBe(false);
+    expect(await readFile(cmd.files.pid, 'utf8').catch(() => 'gone')).toBe('gone');
+    // A stale pid file whose pid now belongs to another process: cleanup leaves that process alone.
+    const other = spawn('sleep', ['30']);
+    others.push(other);
+    const stale = simpleperfCommand('com.example', dir, 'b');
+    await writeFile(stale.files.pid, `${other.pid}\n`);
+    await run('sh', ['-c', stale.kill]);
+    expect(alive(other.pid ?? 0)).toBe(true);
+    expect(await readFile(stale.files.pid, 'utf8').catch(() => 'gone')).toBe('gone');
+    // A simpleperf that exits at once is refused.
     await writeFile(join(dir, 'simpleperf'), '#!/bin/sh\necho "no permission"\nexit 1\n', { mode: 0o755 });
+    const refused = simpleperfCommand('com.example', dir, 'c');
     expect(
-      await background('sh', ['-c', env + cmd.start], 'simpleperf', 200).then(
+      await background('sh', ['-c', env + refused.start], 'simpleperf', 200).then(
         () => 'started',
         (error: unknown) => String(error),
       ),
     ).toContain('did not start');
-    await run('sh', ['-c', cmd.kill]);
-    expect(await readFile(cmd.files.pid, 'utf8').catch(() => 'gone')).toBe('gone');
   } finally {
+    for (const o of others) o.kill('SIGKILL');
     await rm(dir, { recursive: true, force: true });
   }
 });

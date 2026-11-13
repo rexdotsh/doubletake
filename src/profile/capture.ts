@@ -64,20 +64,18 @@ export async function background(cmd: string, args: string[], what: string, sett
 }
 
 /**
- * The device command that starts simpleperf in the background under `dir`: its own output goes to a log file and
- * its pid to a pid file before anything else happens, so stdout carries only the pid and a cleanup can always
- * find the process, even when the start is refused.
+ * The device commands of one simpleperf session under `dir`, its files named by `nonce`: start writes simpleperf's
+ * output to a log and its pid to a pid file before anything else, so stdout carries only the pid; kill signals that
+ * pid only while it is still this session's simpleperf (its command line names this session's data file), so a
+ * stale file whose pid was reused never kills another process.
  */
-export function simpleperfCommand(appId: string, dir: string) {
-  const files = {
-    data: `${dir}/doubletake-profile.data`,
-    pid: `${dir}/doubletake-profile.pid`,
-    log: `${dir}/doubletake-profile.log`,
-  };
+export function simpleperfCommand(appId: string, dir: string, nonce: string) {
+  const stem = `${dir}/doubletake-profile-${nonce}`;
+  const files = { data: `${stem}.data`, pid: `${stem}.pid`, log: `${stem}.log` };
   return {
     files,
     start: `simpleperf record --app ${appId} -e cpu-clock -f 1000 --call-graph fp -o ${files.data} >${files.log} 2>&1 & echo $! >${files.pid}; echo $!; wait`,
-    kill: `p=$(cat ${files.pid} 2>/dev/null); [ -n "$p" ] && kill -9 $p 2>/dev/null; rm -f ${files.data} ${files.data}.txt ${files.pid} ${files.log}`,
+    kill: `p=$(cat ${files.pid} 2>/dev/null); [ -n "$p" ] && tr '\\0' ' ' </proc/$p/cmdline 2>/dev/null | grep -q -F -- ${files.data} && kill -9 $p 2>/dev/null; rm -f ${files.data} ${files.data}.txt ${files.pid} ${files.log}`,
   };
 }
 
@@ -87,26 +85,30 @@ async function ended(child: ChildProcess, exited: Promise<void>, ms: number, wha
   throw new Error(`${what} did not finish within ${ms / 1000} s`);
 }
 
+let sessions = 0;
+
 /**
  * Android: simpleperf's cpu-clock at 1 kHz with frame-pointer call chains, on every thread of the app. `--app`
  * waits for a cold launch's process. Needs a rooted (userdebug) device or a profileable build.
  */
 export function simpleperf(serial: string, appId: string): Recorder {
   let session: Awaited<ReturnType<typeof background>> | undefined;
-  const cmd = simpleperfCommand(appId, '/data/local/tmp');
-  const remote = cmd.files.data;
+  let cmd: ReturnType<typeof simpleperfCommand> | undefined;
   const shell = async (c: string) => (await run('adb', ['-s', serial, 'shell', c])).stdout;
   const kill = async () => {
-    await quietly(() => shell(cmd.kill));
+    const current = cmd;
+    cmd = undefined;
+    if (current) await quietly(() => shell(current.kill));
   };
   return {
     kind: 'native',
     async start() {
-      await kill();
+      const own = simpleperfCommand(appId, '/data/local/tmp', `${process.pid}-${Date.now()}-${++sessions}`);
+      cmd = own;
       try {
-        session = await background('adb', ['-s', serial, 'shell', cmd.start], 'simpleperf');
+        session = await background('adb', ['-s', serial, 'shell', own.start], 'simpleperf');
       } catch (error) {
-        const log = await shell(`cat ${cmd.files.log} 2>/dev/null`).catch(() => '');
+        const log = await shell(`cat ${own.files.log} 2>/dev/null`).catch(() => '');
         await kill();
         throw log.trim() && error instanceof Refusal
           ? new Refusal('NoProfiler', `${error.message}: ${log.trim()}`)
@@ -115,7 +117,8 @@ export function simpleperf(serial: string, appId: string): Recorder {
     },
     launched: async () => {},
     async stop(_state, raw) {
-      if (!session) throw new Error('simpleperf was not started');
+      if (!session || !cmd) throw new Error('simpleperf was not started');
+      const remote = cmd.files.data;
       await shell(`kill -INT ${session.pid} 2>/dev/null || true`);
       // On a timeout the session stays set, so abort() kills the device's simpleperf too.
       await ended(session.child, session.exited, 30_000, 'simpleperf');
@@ -130,7 +133,7 @@ export function simpleperf(serial: string, appId: string): Recorder {
     async abort() {
       const live = session;
       session = undefined;
-      // The pid file names the device's simpleperf whether or not its start was accepted.
+      // The pid file names this session's simpleperf whether or not its start was accepted.
       await kill();
       if (live) await quietly(() => stop(live.child, 'SIGKILL'));
     },
