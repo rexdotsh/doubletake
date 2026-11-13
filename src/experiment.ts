@@ -88,7 +88,7 @@ async function quiet(o: BenchOptions): Promise<void> {
       o.queue.waitedMs += waited;
       throw new Refusal(
         'Background',
-        `other processes still used ${cores.toFixed(1)} of ${cpus().length} cores (limit ${limit()}; ${busy}) after ${Math.round((o.queue.waitedMs + waited) / 60_000)} min of waiting: run where nothing else runs, or wrap the bench in the host's lock; the runs so far are in runs.ndjson`,
+        `other processes still used ${cores.toFixed(1)} of ${cpus().length} cores (limit ${limit()}; ${busy}) after ${Math.round(o.queue.waitedMs / 60_000)} min of waiting: run where nothing else runs, or wrap the bench in the host's lock; the runs so far are in runs.ndjson`,
       );
     }
     if (!said)
