@@ -2,6 +2,10 @@
 // the host reads them from the simulator's log stream or logcat and sums those inside a run's window.
 // Nothing runs on a timer: a line is written only when something happens (a mark, a late frame, a request).
 
+import { type Probe, installProbe } from './probe';
+
+export type { ProbeRead, ProbeRequest } from './probe';
+
 type Options = {
   /** Report late JS frames from a requestAnimationFrame loop (RN's "JS FPS"). Default true. */
   frames?: boolean;
@@ -83,4 +87,13 @@ export function mark(name: string): void {
 /** Pass as a React `<Profiler onRender>` to count commits and render time (profiling builds only). */
 export function onRender(_id: string, _phase: string, actualDuration: number): void {
   write(`p ${Date.now()} ${actualDuration.toFixed(1)}`);
+}
+
+/**
+ * Installs the screen probe (React commits and component renders, requests with their timing) as
+ * `globalThis.__doubletake_probe__`; it counts only between its `begin()` and `read()`. Call it first in the app's
+ * entry file, before React loads, when a bridge reads it in a release build; over CDP, doubletake injects it itself.
+ */
+export function probe(): Probe {
+  return installProbe(globalThis);
 }

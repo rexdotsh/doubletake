@@ -171,6 +171,36 @@ export const METRICS: Record<string, MetricInfo> = {
     platforms: both,
     sdk: true,
   },
+  'probe.commits': {
+    unit: 'count',
+    better: 'lower',
+    source: "the app's probe: React commits in the window",
+    platforms: both,
+  },
+  'probe.renders': {
+    unit: 'count',
+    better: 'lower',
+    source: "the app's probe: component renders (mounts included) in the window's commits",
+    platforms: both,
+  },
+  'probe.requests': {
+    unit: 'count',
+    better: 'lower',
+    source: "the app's probe: XMLHttpRequest/fetch requests started in the window",
+    platforms: both,
+  },
+  'probe.duplicates': {
+    unit: 'count',
+    better: 'lower',
+    source: "the app's probe: requests repeating an earlier one in the window (method, URL, query and body)",
+    platforms: both,
+  },
+  'probe.bytes': {
+    unit: 'bytes',
+    better: 'lower',
+    source: "the app's probe: response bytes (Content-Length, else the body)",
+    platforms: both,
+  },
 };
 
 export function metricInfo(name: string): MetricInfo | undefined {

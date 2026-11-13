@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { METRICS, metricInfo } from './metrics.ts';
+import { PROBE_METRICS, type ProbeConfig, probeConfig } from './probe.ts';
 import { get, isRecord } from './util.ts';
 
 import type { Point, Target } from './device.ts';
@@ -54,6 +55,8 @@ export type Bench = {
   alerts?: string[];
   /** Fractions of the screen [x, y, w, h] that visual metrics ignore, such as a clock or a looping animation. */
   ignore?: [number, number, number, number][];
+  /** Where `probe.*` metrics come from: Metro (CDP, dev clients) or a bridge in the app. */
+  probe?: ProbeConfig;
 };
 
 export type CaseKind = 'launch' | 'run' | 'idle';
@@ -275,20 +278,29 @@ function region(value: unknown, where: string): [number, number, number, number]
 /** Parses an untrusted bench object once, at the edge, into a typed bench. */
 export function validate(raw: unknown): Bench {
   const bench = object(raw, 'bench');
-  keys(bench, ['app', 'cases', 'runs', 'alerts', 'ignore'], 'bench');
+  keys(bench, ['app', 'cases', 'runs', 'alerts', 'ignore', 'probe'], 'bench');
   const app = object(bench.app ?? {}, 'app');
   keys(app, ['ios', 'android'], 'app');
   const cases = object(bench.cases, 'cases');
   if (Object.keys(cases).length === 0) throw new Error('cases: at least one case');
+  const parsed = Object.fromEntries(Object.entries(cases).map(([name, c]) => [name, parseCase(c, `cases["${name}"]`)]));
+  for (const [name, c] of Object.entries(parsed)) {
+    const probed = [c.primary, ...(c.metrics ?? [])].filter((m) => PROBE_METRICS.includes(m));
+    if (!probed.length) continue;
+    if (bench.probe === undefined)
+      throw new Error(`cases["${name}"]: ${probed.join(', ')} need the bench's probe (cdp or bridge)`);
+    if (c.launch) throw new Error(`cases["${name}"]: probe metrics are for run and idle cases`);
+  }
   return {
     app: {
       ios: optional(app.ios, (v) => string(v, 'app.ios')),
       android: optional(app.android, (v) => string(v, 'app.android')),
     },
-    cases: Object.fromEntries(Object.entries(cases).map(([name, c]) => [name, parseCase(c, `cases["${name}"]`)])),
+    cases: parsed,
     runs: optional(bench.runs, (v) => count(v, 'runs')),
     alerts: optional(bench.alerts, (v) => list(v, 'alerts').map((b, i) => string(b, `alerts[${i}]`))),
     ignore: optional(bench.ignore, (v) => list(v, 'ignore').map((r, i) => region(r, `ignore[${i}]`))),
+    probe: optional(bench.probe, probeConfig),
   };
 }
 

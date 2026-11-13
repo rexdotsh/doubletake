@@ -91,24 +91,70 @@ mark('home');
 
 The SDK has no dependencies and no timers: each event is one log line written when it happens (`[doubletake] m <time> home`). Native apps can write the same lines with `os_log` or `android.util.Log` and get the same metrics.
 
+## Renders and requests per screen (the app probe)
+
+A case can read what the screen did inside the app over its window: React commits and the components each one rendered, and the requests it made, with duplicates, bytes and a waterfall. Name a transport in the bench and declare `probe.*` metrics in run or idle cases (one case per screen):
+
+```ts
+export default {
+  app: { android: 'com.example.app' },
+  // A dev client: doubletake injects the probe over Metro's inspector (CDP). Nothing to add to the app.
+  probe: { cdp: 'http://localhost:8081' },
+  cases: {
+    'screen feed': {
+      setup: ['launch', { wait: 'mark:home' }],
+      run: [{ open: 'myapp://feed' }, { sleep: '5s' }],
+      primary: 'probe.renders',
+      metrics: ['probe.commits', 'probe.requests', 'probe.duplicates', 'probe.bytes'],
+    },
+  },
+};
+```
+
+- **`cdp`** (dev clients, dev-mode JS): before each window doubletake finds the app's runtime in Metro's `/json/list` (exactly the bench's app id, on the device under test by the name Metro lists; a runtime without a device name, or two devices running it, are refused), injects the probe with `Runtime.evaluate` (it wraps the DevTools hook React already reports to), and reads the window after it. Component names are the source's.
+- **`bridge`** (any build, release included): the app exposes a deep link that runs a script and answers in its log. The probe must be installed before React loads (`import { probe } from 'doubletake/sdk'; probe();` first in the entry file): React attaches to a DevTools hook only when it starts. The bridge's `begin` script calls `globalThis.__doubletake_probe__.begin()`, its `read` script answers with `globalThis.__doubletake_probe__.read(from, to)`. Release builds minify component names.
+
+```ts
+probe: {
+  bridge: {
+    link: 'myapp://debug?n={nonce}&c={script}', // {script} is URL-encoded
+    reply: '[APP]', // the app logs `[APP] <nonce> <i>/<n> <json chunk>`, chunks of up to ~800 characters
+    begin: 'probe begin',
+    read: 'probe read {from} {to}', // the window, device clock (ms since the epoch)
+    parse: (reply) => reply.result, // optional: where the counts are in the reply
+  },
+},
+```
+
+A reply with `ok: false` is a failure. The probe keeps every commit and request with its time, and `read(from, to)` counts only those inside the window, so the link's latency after the window is not counted. The counts are the probe's record (`schema: 'doubletake.probe.v1'`: `from`, `to`, `ms`, `renderers`, `commits`, `renders`, `mounts`, `components: [[name, renders, mounts]]`, `requests: [{ method, url, query, body, status, bytes, start, headers, end }]` with query and body as hashes and times in ms from `from`, `network`, `dropped`, `droppedCommits`), or an aggregate a simpler bridge can give: `{ ms, commits, renders, renderers, requests, duplicates, bytes, top: [{ key, count }] }` (`renderers` is the hook's attached renderers: without it the render counts are refused, since zero commits from a hook React never reached cannot be told from a screen that did not render); a field it lacks is refused (`NoProbe`), never zero. Counts are refused, never short: a record with unreadable request entries (`InvalidProbe`; entries without query and body fingerprints refuse duplicates, without a size bytes) or past its caps (`Overflow`: 2,000 requests, 5,000 commits), duplicates when a body could not be fingerprinted (`UnknownBody`), and everything when the app's span is off the window by more than 300 ms or 5% (`WindowOverrun`: an aggregate's `ms`, or a record read without `{from}` and `{to}`) or unknown (`NoWindow`).
+
+What it sees and what it does not:
+
+- A component render is a function, class, forwardRef or memo component that React rendered in a commit (React DevTools' rule: a mount, or `PerformedWork` on a fiber whose subtree was not bailed out of). Mounts are counted and shown apart: the re-render list is renders minus mounts.
+- Requests are XMLHttpRequest, so `fetch` in React Native, started inside the window. Images and native SDKs' own requests are not seen. A duplicate repeats an earlier request in the window: same method, URL, query and body (text and byte bodies hashed, React Native's FormData by its parts; any other body is unknown). Bytes are Content-Length, else the body's UTF-8 size; a request still in flight at the window's end has none.
+- The probe costs a walk of each commit's rendered fibers: timing metrics in a probe case read the app with it on. Opening a bridge's link before and after the window can wake the app (the bridge's log follower attaches once, before the first window); CDP does not.
+- `report` adds a section per case: the counts, the components that re-rendered most, duplicate requests, and a request waterfall (in a bench, each side's run with the median renders, and the components whose renders changed most). The counts get verdicts as any metric (counts that every run read the same compare exactly).
+
 ## Metrics
 
-| Metric                          | Where     | From                                                                                                                                                                                 |
-| ------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `launch.ttid`                   | Android   | `am start -W` TotalTime: the intent to the first frame                                                                                                                               |
-| `launch.ttfd`, `mark.<name>`    | both, SDK | the process start (iOS) or the launch intent (Android) to the mark                                                                                                                   |
-| `launch.visual`                 | both      | a screen recording: the launch (iOS) or its first visible change (Android, whose recorder has no start clock) to the frame after which the screen stays within 1% of its final image |
-| `cpu.time`, `cpu.idle`          | both      | the app process's CPU time over the run, or per second idle                                                                                                                          |
-| `memory.peak`, `memory.end`     | both      | iOS `footprint` (phys_footprint and its peak); Android VmHWM and PSS                                                                                                                 |
-| `frames.janky`, `frames.p90`    | Android   | `dumpsys gfxinfo`, reset before the run                                                                                                                                              |
-| `frames.long`                   | Android   | `dumpsys gfxinfo` histogram: frames of 100 ms or more                                                                                                                                |
-| `frames.idle`                   | Android   | frames drawn per second in an idle case: anything animating while nobody touches the screen                                                                                          |
-| `memory.growth`                 | both      | memory at the end of the window minus at its start; repeat a round trip in `run` to find a leak                                                                                      |
-| `visual.flashes`                | both      | a recording: near-white or near-black share up 25 points and back within 300 ms (whole frame, or a 4% edge strip it fills)                                                           |
-| `visual.freeze`, `visual.jumps` | both      | a recording: the longest still stretch mid-transition, and changes after the screen held still 300 ms                                                                                |
-| `js.stall`, `js.frames.dropped` | both, SDK | requestAnimationFrame frames that came late: a busy JS thread                                                                                                                        |
-| `net.requests`, `net.bytes`     | both, SDK | finished XMLHttpRequest/fetch requests and response bytes                                                                                                                            |
-| `react.commits`, `react.render` | both, SDK | React Profiler `onRender` (profiling builds only)                                                                                                                                    |
+| Metric                                              | Where       | From                                                                                                                                                                                 |
+| --------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `launch.ttid`                                       | Android     | `am start -W` TotalTime: the intent to the first frame                                                                                                                               |
+| `launch.ttfd`, `mark.<name>`                        | both, SDK   | the process start (iOS) or the launch intent (Android) to the mark                                                                                                                   |
+| `launch.visual`                                     | both        | a screen recording: the launch (iOS) or its first visible change (Android, whose recorder has no start clock) to the frame after which the screen stays within 1% of its final image |
+| `cpu.time`, `cpu.idle`                              | both        | the app process's CPU time over the run, or per second idle                                                                                                                          |
+| `memory.peak`, `memory.end`                         | both        | iOS `footprint` (phys_footprint and its peak); Android VmHWM and PSS                                                                                                                 |
+| `frames.janky`, `frames.p90`                        | Android     | `dumpsys gfxinfo`, reset before the run                                                                                                                                              |
+| `frames.long`                                       | Android     | `dumpsys gfxinfo` histogram: frames of 100 ms or more                                                                                                                                |
+| `frames.idle`                                       | Android     | frames drawn per second in an idle case: anything animating while nobody touches the screen                                                                                          |
+| `memory.growth`                                     | both        | memory at the end of the window minus at its start; repeat a round trip in `run` to find a leak                                                                                      |
+| `visual.flashes`                                    | both        | a recording: near-white or near-black share up 25 points and back within 300 ms (whole frame, or a 4% edge strip it fills)                                                           |
+| `visual.freeze`, `visual.jumps`                     | both        | a recording: the longest still stretch mid-transition, and changes after the screen held still 300 ms                                                                                |
+| `js.stall`, `js.frames.dropped`                     | both, SDK   | requestAnimationFrame frames that came late: a busy JS thread                                                                                                                        |
+| `net.requests`, `net.bytes`                         | both, SDK   | finished XMLHttpRequest/fetch requests and response bytes                                                                                                                            |
+| `react.commits`, `react.render`                     | both, SDK   | React Profiler `onRender` (profiling builds only)                                                                                                                                    |
+| `probe.commits`, `probe.renders`                    | both, probe | React commits and component renders in the window (the app probe: CDP or a bridge)                                                                                                   |
+| `probe.requests`, `probe.duplicates`, `probe.bytes` | both, probe | requests started in the window, repeats of an earlier one (method, URL, query, body), response bytes                                                                                 |
 
 ## How a verdict is made
 

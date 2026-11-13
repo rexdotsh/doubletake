@@ -4,6 +4,7 @@ import type { Device, LogTap, Recording } from './device.ts';
 import { Refusal } from './device.ts';
 import { countersIn, marksIn, ofProcess } from './events.ts';
 import { type FlowState, launch, runSteps } from './flow.ts';
+import { PROBE_METRICS, type ProbeDetail, type ProbeSession, probeValues } from './probe.ts';
 import { sleep } from './sh.ts';
 import { type Region, type Transition, VIDEO_FPS, decodeFrames, transition, visualTimes } from './visual.ts';
 
@@ -12,7 +13,7 @@ type RunValues = Record<string, number>;
 export class RecorderStuck extends Error {}
 
 /** A run's recording, if filmed, and when its action began (host clock). */
-type Filmed = { recording?: Recording; action: number };
+type Filmed = { recording?: Recording; action: number; probe?: ProbeDetail };
 /** A measured window and the start of the app process in it, device clock. */
 type Window = { from: number; to: number; launched: number; pid: number };
 export type RunResult = {
@@ -21,6 +22,8 @@ export type RunResult = {
   refused: Record<string, string>;
   /** `events`: the flashes and jumps a transition metric found, ms from the start of the video. */
   video?: { file: string; first: number; seconds: number; events?: Transition['events'] };
+  /** What the app's probe saw in the window: renders by component, requests. */
+  probe?: ProbeDetail;
 };
 
 export type RunContext = {
@@ -33,6 +36,8 @@ export type RunContext = {
   dir: string;
   /** Where this run's video goes, when the run is filmed. */
   video?: string;
+  /** The app's probe, when the case declares probe metrics. */
+  probe?: ProbeSession;
 };
 
 /** Log lines reach the host a few ms after they are written; wait this long after a window before reading it. */
@@ -260,6 +265,7 @@ async function windowRun(
   const recording = ctx.video ? await device.record(ctx.video) : undefined;
   filming.recording = recording;
   if (recording) await sleep(1000);
+  const probe = ctx.probe ? await probeCall(() => ctx.probe?.begin(), refused) : undefined;
   // A counter's snapshot is taken somewhere inside its adb call: time it at the call's midpoint.
   const resetAt = Date.now();
   await device.frames?.reset(appId);
@@ -275,6 +281,13 @@ async function windowRun(
   const readAt = Date.now();
   const frames = await device.frames?.read(appId);
   const framesTo = (readAt + Date.now()) / 2;
+  const span = { from: start + ctx.offset, to: end + ctx.offset };
+  const probed = probe?.ok ? await probeCall(() => ctx.probe?.read(span), refused) : undefined;
+  if (probed?.value) {
+    const got = probed.value;
+    for (const [m, v] of Object.entries(probeValues(got.detail))) if (!got.refused[m]) values[m] = v;
+    Object.assign(refused, got.refused);
+  }
   values['cpu.time'] = cpu;
   if (c.idle) values['cpu.idle'] = cpu / ((end - start) / 1000);
   else values['run.duration'] = end - start;
@@ -305,7 +318,18 @@ async function windowRun(
     launched: (state.launched?.t0 ?? 0) + ctx.offset,
     pid,
   });
-  return { recording, action: start };
+  return { recording, action: start, probe: probed?.value?.detail };
+}
+
+/** A probe call; an app that cannot answer refuses the probe metrics, it does not fail the run. */
+async function probeCall<T>(call: () => Promise<T> | undefined, refused: Record<string, string>) {
+  try {
+    return { ok: true, value: await call() };
+  } catch (error) {
+    if (!(error instanceof Refusal)) throw error;
+    refuse(refused, PROBE_METRICS, `${error.validator}: ${error.message}`);
+    return { ok: false, value: undefined };
+  }
 }
 
 /** One run of a case on an installed app; with `video`, the run is filmed (only filmed blocks pass one). */
@@ -339,7 +363,7 @@ export async function runOnce(ctx: RunContext): Promise<RunResult> {
       });
     throw error;
   }
-  const { recording, action } = outcome;
+  const { recording, action, probe } = outcome;
   const video = recording ? await analyseVideo(recording, values, refused, ctx.bench, ctx.case, action) : undefined;
-  return { values, refused, video };
+  return { values, refused, video, probe };
 }

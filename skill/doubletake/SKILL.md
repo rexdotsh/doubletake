@@ -48,6 +48,7 @@ export default {
 
 - App without the SDK: `cpu.time` (the app's CPU from launch to a fixed hold; on a starved machine less work finishes in the hold, so it needs a quiet host as much as wall time does), `memory.peak`, `launch.visual` (needs a screen that stops moving; `ignore` regions otherwise), `cpu.idle`.
 - With the SDK (`import { start, mark } from 'doubletake/sdk'`): `launch.ttfd` to a mark, `js.stall` for scrolls, `net.requests` (exact) for polling.
+- Per screen, renders and requests: a bench `probe` (`{ cdp: '<metro url>' }` on a dev client, or a `bridge` the app exposes) and `probe.renders`, `probe.commits`, `probe.requests`, `probe.duplicates`, `probe.bytes` in run or idle cases; `report` lists the re-rendering components, duplicate requests and a waterfall.
 - Android adds `launch.ttid` (`am start -W`) and `frames.janky` (`gfxinfo`).
 
 ## Limits
