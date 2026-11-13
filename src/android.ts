@@ -183,10 +183,12 @@ function device(serial: string, adb: Adb, shell: (cmd: string) => Promise<string
       const exited = new Promise<void>((resolve) => child.once('close', () => resolve()));
       const timer = setTimeout(() => first.resolve(''), 2000);
       const pid = await first.promise;
+      const startedNear = Date.now();
       clearTimeout(timer);
       if (!/^\d+$/.test(pid)) throw new Error('screenrecord did not start');
       await sleep(500);
       return {
+        startedNear,
         async stop() {
           await shell(`kill -INT ${pid} 2>/dev/null || true`);
           const done = await Promise.race([exited.then(() => true), sleep(15_000).then(() => false)]);

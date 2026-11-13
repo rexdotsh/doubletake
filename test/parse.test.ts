@@ -91,17 +91,17 @@ test('a screen still changing at the end is refused', () => {
   expect(() => visualTimes(frames)).toThrow(/still changing/);
 });
 
-test('a clip without a start clock times launch.visual from its first change', () => {
+test('a clip without a start clock times launch.visual from its first change, if that is the launch', () => {
   const still = new Uint8Array(72 * 156).fill(10);
+  const widget = new Uint8Array(72 * 156).fill(60);
   const splash = new Uint8Array(72 * 156).fill(120);
   const home = new Uint8Array(72 * 156).fill(220);
-  // 1 s still (60 frames), 0.5 s splash, then Home for 2 s.
-  const frames = [...Array(60).fill(still), ...Array(30).fill(splash), ...Array(120).fill(home)];
-  const result = clockless(frames);
-  expect(result.first).toBe(1);
-  expect(result.visual).toBe(500);
-  expect(clockless(frames.slice(0, 100)).refusal).toMatch(/NotSettled/);
-  // A screen already moving when the recording starts: the launch can't be told apart.
-  const wallpaper = [new Uint8Array(72 * 156).fill(60), ...frames.slice(60)];
-  expect(clockless(wallpaper).refusal).toMatch(/NoStillBaseline/);
+  // 1.5 s still (90 frames), the launch issued at ~1500 ms, 0.5 s splash, then Home for 2 s.
+  const frames = [...Array(90).fill(still), ...Array(30).fill(splash), ...Array(120).fill(home)];
+  expect(clockless(frames, [], true, 1500)).toEqual({ first: 1.5, visual: 500 });
+  expect(clockless(frames.slice(0, 130), [], true, 1500).refusal).toMatch(/NotSettled/);
+  expect(clockless(frames).refusal).toMatch(/NoVideoClock/);
+  // A widget that changes at 800 ms, well before the launch: not timed from it.
+  const early = [...Array(48).fill(still), ...Array(42).fill(widget), ...frames.slice(90)];
+  expect(clockless(early, [], true, 1500).refusal).toMatch(/ChangeBeforeLaunch/);
 });
