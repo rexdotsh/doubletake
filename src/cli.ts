@@ -17,7 +17,7 @@ import { card, summary } from './report.ts';
 import { run, which } from './sh.ts';
 import { type Experiment, type Variant, experimentDir, loadExperiment, newId } from './store.ts';
 import { ffmpegPath } from './visual.ts';
-import { readLaunches, timelineSvg, timelineText, timelines } from './waterfall.ts';
+import { readLaunches, timelineSvg, timelineText, timelines } from './timeline-report.ts';
 
 const USAGE = `doubletake ${pkg.version}: A/B performance for React Native apps on simulators and emulators
 

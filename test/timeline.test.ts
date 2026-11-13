@@ -3,7 +3,7 @@ import { validate } from '../src/bench.ts';
 import { parseSdkLine } from '../src/events.ts';
 import { metricInfo } from '../src/metrics.ts';
 import { androidMark, iosMark, osLogTime, phasesOf, waterfall } from '../src/timeline.ts';
-import { timelineSvg, timelineText, timelines } from '../src/waterfall.ts';
+import { timelineSvg, timelineText, timelines } from '../src/timeline-report.ts';
 import type { Experiment } from '../src/store.ts';
 
 const pkg = 'dev.example.app';
@@ -157,6 +157,7 @@ test('a timeline names each side, missing marks and the A/B of each phase, as te
     checks: [],
     warnings: [],
   };
+  const headLaunches: Record<string, number>[] = [{ 'js.run': 410, home: 800 }, { home: 820 }];
   const launches = new Map([
     [
       'cold <start>',
@@ -168,7 +169,7 @@ test('a timeline names each side, missing marks and the A/B of each phase, as te
             { 'js.run': 420, home: 940 },
           ],
         ],
-        ['head' as const, [{ 'js.run': 410, home: 800 }, { home: 820 }]],
+        ['head' as const, headLaunches],
       ]),
     ],
   ]);
