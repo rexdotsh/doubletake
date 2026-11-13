@@ -40,8 +40,9 @@ export default {
 ```
 
 - One of `launch`, `run` or `idle` per case. `setup` is untimed; `run` is timed.
-- Steps: `launch`, `terminate`, `{ open }`, `{ wait: 'mark:x' }`, `{ sleep }`, `{ tap }`, `{ swipe }`, `{ scroll }`, `{ maestro: 'flow.yaml' }`, `{ shell }`. iOS taps and swipes go through AXe, Android ones through adb (milliseconds; they do not wait for the screen to settle, so add a `wait` or `sleep`). A tap is `[x, y]` (fractions, 0–1), `{ points: [x, y] }`, a label string, `{ label }` or `{ id }` (test ID), with `index` for one of several matches (0 first). Android element taps need Maestro (seconds): keep them in `setup`. iOS system prompts: `open` accepts "Open in …?" itself; list other prompt buttons in the bench's `alerts`.
+- Steps: `launch`, `terminate`, `{ open }`, `{ wait: 'mark:x' }`, `{ sleep }`, `{ tap }`, `{ swipe }`, `{ scroll }`, `{ maestro: 'flow.yaml' }`, `{ shell }`, `{ repeat: [steps], times }`. iOS taps and swipes go through AXe, Android ones through adb (milliseconds; they do not wait for the screen to settle, so add a `wait` or `sleep`). A tap is `[x, y]` (fractions, 0–1), `{ points: [x, y] }`, a label string, `{ label }` or `{ id }` (test ID), with `index` for one of several matches (0 first). Android element taps need Maestro (seconds): keep them in `setup`. iOS system prompts: `open` accepts "Open in …?" itself; list other prompt buttons in the bench's `alerts`.
 - Unknown keys and metrics fail with the nearest name.
+- A screen survey is a `check` (one run per case): an idle case per screen for `cpu.idle` and `frames.idle` (anything animating at rest), a run case that repeats a round trip for `memory.growth`, and transition cases that declare `visual.flashes`, `visual.freeze` or `visual.jumps` (every run is filmed; `frames.long` counts stalls on Android).
 
 ## Picking a primary
 

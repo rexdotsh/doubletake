@@ -27,7 +27,7 @@ export type Action = { tap: Point | Target } | { swipe: { from: Point; to: Point
 export const isPoint = (at: Point | Target): at is Point =>
   Array.isArray(at) || (typeof at === 'object' && 'points' in at);
 
-type Frames = { total: number; janky: number; p90: number };
+type Frames = { total: number; janky: number; p90: number; long?: number };
 
 /** SDK lines from the app, collected while a block runs. */
 export interface LogTap {

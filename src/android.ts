@@ -29,13 +29,21 @@ export function parseAmStart(out: string): { totalTime?: number; launchState?: s
   return { totalTime: total ? Number(total) : undefined, launchState: /LaunchState:\s*(\w+)/.exec(out)?.[1] };
 }
 
-/** Parses `dumpsys gfxinfo <package>`. */
-export function parseGfxinfo(out: string): { total: number; janky: number; p90: number } {
+/** Frames in histogram buckets at or above this count as long. */
+const LONG_FRAME_MS = 100;
+
+/** Parses `dumpsys gfxinfo <package>`; `long` is undefined without a histogram line. */
+export function parseGfxinfo(out: string): { total: number; janky: number; p90: number; long?: number } {
   const num = (re: RegExp) => Number(re.exec(out)?.[1] ?? Number.NaN);
+  const histogram = /^\s*HISTOGRAM:(.*)$/m.exec(out)?.[1];
+  const buckets = [...(histogram ?? '').matchAll(/(\d+)ms=(\d+)/g)];
   return {
     total: num(/Total frames rendered:\s*(\d+)/),
     janky: num(/Janky frames:\s*(\d+)/),
     p90: num(/90th percentile:\s*(\d+)ms/),
+    long: histogram
+      ? buckets.filter((b) => Number(b[1]) >= LONG_FRAME_MS).reduce((n, b) => n + Number(b[2]), 0)
+      : undefined,
   };
 }
 

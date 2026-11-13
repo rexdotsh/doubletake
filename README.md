@@ -68,7 +68,7 @@ A case is one of:
 
 Any case can also set `runs` (measured runs per block), `bound` (the `same` band, `'2%'` by default) and `floor` (a noise floor, such as `'4%'`: see below).
 
-Steps: `launch`, `terminate`, `{ open: url }` (deep link), `{ wait: 'mark:name' }`, `{ sleep: '2s' }`, `{ tap: … }`, `{ swipe: { from, to } }`, `{ scroll: 'down', times }`, `{ maestro: 'flow.yaml' }`, `{ shell: '…' }`.
+Steps: `launch`, `terminate`, `{ open: url }` (deep link), `{ wait: 'mark:name' }`, `{ sleep: '2s' }`, `{ tap: … }`, `{ swipe: { from, to } }`, `{ scroll: 'down', times }`, `{ maestro: 'flow.yaml' }`, `{ shell: '…' }`, `{ repeat: [steps], times: 50 }` (a round trip, for `memory.growth`).
 
 A tap takes a place or an element:
 
@@ -101,6 +101,11 @@ The SDK has no dependencies and no timers: each event is one log line written wh
 | `cpu.time`, `cpu.idle`          | both      | the app process's CPU time over the run, or per second idle                                                                                                                          |
 | `memory.peak`, `memory.end`     | both      | iOS `footprint` (phys_footprint and its peak); Android VmHWM and PSS                                                                                                                 |
 | `frames.janky`, `frames.p90`    | Android   | `dumpsys gfxinfo`, reset before the run                                                                                                                                              |
+| `frames.long`                   | Android   | `dumpsys gfxinfo` histogram: frames of 100 ms or more                                                                                                                                |
+| `frames.idle`                   | Android   | frames drawn per second in an idle case: anything animating while nobody touches the screen                                                                                          |
+| `memory.growth`                 | both      | memory at the end of the window minus at its start; repeat a round trip in `run` to find a leak                                                                                      |
+| `visual.flashes`                | both      | a recording: near-white or near-black share up 25 points and back within 300 ms (whole frame, or a 4% edge strip it fills)                                                           |
+| `visual.freeze`, `visual.jumps` | both      | a recording: the longest still stretch mid-transition, and changes after the screen held still 300 ms                                                                                |
 | `js.stall`, `js.frames.dropped` | both, SDK | requestAnimationFrame frames that came late: a busy JS thread                                                                                                                        |
 | `net.requests`, `net.bytes`     | both, SDK | finished XMLHttpRequest/fetch requests and response bytes                                                                                                                            |
 | `react.commits`, `react.render` | both, SDK | React Profiler `onRender` (profiling builds only)                                                                                                                                    |

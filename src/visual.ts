@@ -68,6 +68,125 @@ function changed(a: Uint8Array, b: Uint8Array, keep: Uint8Array): boolean {
 
 export type Visual = { first: number; complete: number; frames: number };
 
+/** A flash: near-white (or near-black) share rising by this much and falling back within FLASH_MS. */
+const FLASH_RISE = 0.25;
+const FLASH_MS = 300;
+const WHITE = 200;
+const BLACK = 30;
+/** Edge strips, as a share of the frame's width or height: a flash often shows only as a border. */
+const EDGE = 0.04;
+/** An edge flash fills its strip; a bright button sliding through one only crosses part of it. */
+const EDGE_FILL = 0.8;
+/** A change after the screen held still this long is a jump: a layout shift or content popping in late. */
+const STILL_MS = 300;
+const SETTLE_MS = 500;
+
+/** `ms`: how long a flash lasted, or how long the screen held still before a jump. */
+type TransitionEvent = { kind: 'flash-white' | 'flash-black' | 'jump'; at: number; ms: number };
+/** `settled`: the screen held still for SETTLE_MS before the recording ended; freeze and jumps need it. */
+export type Transition = {
+  flashes: number;
+  freeze: number;
+  jumps: number;
+  settled: boolean;
+  events: TransitionEvent[];
+};
+
+const at = (frame: number) => (frame * 1000) / FPS;
+
+/** Share of kept pixels above (or below) a gray level, per frame, in one region. */
+function shares(frames: readonly Uint8Array[], keep: Uint8Array, region: Region, test: (v: number) => boolean) {
+  const [x, y, w, h] = region;
+  const cols = [Math.floor(x * WIDTH), Math.min(WIDTH, Math.ceil((x + w) * WIDTH))] as const;
+  const rows = [Math.floor(y * HEIGHT), Math.min(HEIGHT, Math.ceil((y + h) * HEIGHT))] as const;
+  return frames.map((f) => {
+    let hit = 0;
+    let total = 0;
+    for (let row = rows[0]; row < rows[1]; row++)
+      for (let col = cols[0]; col < cols[1]; col++) {
+        const i = row * WIDTH + col;
+        if (!keep[i]) continue;
+        total++;
+        if (test(get(f, i))) hit++;
+      }
+    return total ? hit / total : 0;
+  });
+}
+
+/** Spikes in a share series: a rise of FLASH_RISE over the frame before, to at least `fill`, that falls back within FLASH_MS. */
+function spikes(series: readonly number[], fill = 0): { at: number; frames: number }[] {
+  const window = Math.round((FLASH_MS * FPS) / 1000);
+  const found: { at: number; frames: number }[] = [];
+  for (let i = 1; i < series.length; i++) {
+    const before = get(series, i - 1);
+    if (get(series, i) < Math.max(before + FLASH_RISE, fill)) continue;
+    const back = series.findIndex((v, j) => j > i && j <= i + window && v <= before + FLASH_RISE / 3);
+    if (back < 0) continue;
+    found.push({ at: i, frames: back - i });
+    i = back;
+  }
+  return found;
+}
+
+/**
+ * What a screen transition looked like, from a recording of it: white or black flashes (whole frame or an edge
+ * strip), the longest the screen held still between its first change and visually complete (a freeze), and jumps
+ * (it changed again after holding still for STILL_MS). Times in ms from the start of the video.
+ */
+export function transition(frames: readonly Uint8Array[], ignore: readonly Region[] = []): Transition {
+  const keep = mask(ignore);
+  const start = frames[0];
+  const end = frames.at(-1);
+  if (!start || !end) throw new Refusal('NoVideo', 'the recording has no frames');
+  const events: TransitionEvent[] = [];
+  const regions: Region[] = [
+    [0, 0, 1, 1],
+    [0, 0, EDGE, 1],
+    [1 - EDGE, 0, EDGE, 1],
+    [0, 0, 1, EDGE],
+    [0, 1 - EDGE, 1, EDGE],
+  ];
+  for (const [kind, test] of [
+    ['flash-white', (v: number) => v > WHITE],
+    ['flash-black', (v: number) => v < BLACK],
+  ] as const) {
+    const seen: { at: number; region: number }[] = [];
+    for (const [r, region] of regions.entries())
+      for (const s of spikes(shares(frames, keep, region, test), r === 0 ? 0 : EDGE_FILL)) {
+        // The same flash read in another region (the whole frame and an edge) counts once.
+        if (seen.some((x) => x.region !== r && Math.abs(x.at - s.at) <= 2)) continue;
+        seen.push({ at: s.at, region: r });
+        events.push({ kind, at: at(s.at), ms: at(s.frames) });
+      }
+  }
+  const first = frames.findIndex((f) => changed(f, start, keep));
+  if (first < 0)
+    throw new Refusal(
+      'NoVisualChange',
+      'the screen never changed in the recording: did the step meant to move it miss?',
+    );
+  let freeze = 0;
+  let complete = frames.length - 1;
+  while (complete > first && !changed(get(frames, complete - 1), end, keep)) complete--;
+  // Against the still stretch's first frame, so a slow fade (small steps per frame) still reads as motion.
+  let anchor = first;
+  for (let i = first + 1; i <= complete; i++) {
+    if (!changed(get(frames, i), get(frames, anchor), keep)) continue;
+    const held = at(i - anchor);
+    freeze = Math.max(freeze, held);
+    if (held >= STILL_MS) events.push({ kind: 'jump', at: at(i), ms: held });
+    anchor = i;
+  }
+  events.sort((a, b) => a.at - b.at);
+  return {
+    flashes: events.filter((e) => e.kind.startsWith('flash')).length,
+    freeze,
+    jumps: events.filter((e) => e.kind === 'jump').length,
+    settled: at(frames.length - 1 - complete) >= SETTLE_MS,
+    events,
+  };
+}
+
 export const VIDEO_FPS = FPS;
 
 /**

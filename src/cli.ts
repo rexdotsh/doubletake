@@ -3,7 +3,7 @@ import { cpus, totalmem } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import pkg from '../package.json' with { type: 'json' };
-import { type Bench, loadBench, ms } from './bench.ts';
+import { type Bench, allSteps, loadBench, ms } from './bench.ts';
 import type { Device } from './device.ts';
 import { Refusal } from './device.ts';
 import { androidDevice } from './android.ts';
@@ -228,7 +228,7 @@ async function measure(command: 'bench' | 'check', file: string | undefined, fla
     // Both sides get the same treatment: a copy under a new id, its own container, the same signing.
     if (!device.clone) throw new Error('--side-by-side needs a clone of the build under another id: iOS only');
     const opens = cases.filter((name) =>
-      [...(loaded.cases[name]?.setup ?? []), ...(loaded.cases[name]?.run ?? [])].some(
+      allSteps([...(loaded.cases[name]?.setup ?? []), ...(loaded.cases[name]?.run ?? [])]).some(
         (s) => typeof s === 'object' && 'open' in s,
       ),
     );
