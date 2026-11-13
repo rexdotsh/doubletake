@@ -45,6 +45,9 @@ type Block = { values: Record<string, number>; refused: Record<string, string>; 
 
 const DEFAULT_BOUND = 0.02;
 
+/** Refusals that end one case and let the experiment go on with the next. */
+const CASE_REFUSALS = new Set(['Background', 'PrimaryRefused']);
+
 async function install(o: Pick<BenchOptions, 'device'>, v: Variant): Promise<void> {
   if (v.artifact) await o.device.install(v.artifact);
   else if (!(await o.device.isInstalled(v.appId))) throw new Error(`${v.appId} is not installed on ${o.device.name}`);
@@ -80,11 +83,14 @@ async function quiet(o: BenchOptions): Promise<void> {
       o.queue.waitedMs += waited;
       return;
     }
-    if (o.queue.waitedMs + waited > o.queue.budgetMs)
+    if (o.queue.waitedMs + waited > o.queue.budgetMs) {
+      // Spent: the next case refuses at its first busy sample instead of waiting the budget again.
+      o.queue.waitedMs += waited;
       throw new Refusal(
         'Background',
-        `other processes still used ${cores.toFixed(1)} of ${cpus().length} cores (limit ${limit()}; ${busy}) after ${Math.round((o.queue.waitedMs + waited) / 60_000)} min of waiting: run where nothing else runs, or wrap the bench in the host's lock; the runs so far are in runs.ndjson`,
+        `other processes still used ${cores.toFixed(1)} of ${cpus().length} cores (limit ${limit()}; ${busy}) after ${Math.round(o.queue.waitedMs / 60_000)} min of waiting: run where nothing else runs, or wrap the bench in the host's lock; the runs so far are in runs.ndjson`,
       );
+    }
     if (!said)
       o.log(
         `waiting for the host to go quiet: other processes use ${cores.toFixed(1)} cores (${busy}), limit ${limit()}`,
@@ -343,12 +349,21 @@ async function benchLocked(o: BenchOptions): Promise<Experiment> {
   await o.device.prepare();
   if (o.base.appId !== o.head.appId) await Promise.all([install(o, o.base), install(o, o.head)].map((p) => p));
   for (const name of o.cases) {
-    const result = await series(o, name);
-    o.experiment.series.push(result);
+    try {
+      o.experiment.series.push(await series(o, name));
+    } catch (error) {
+      // A busy host or a refused primary costs this case, not the ones after it: they get their own blocks and
+      // guard. Other refusals (a missing marker, a broken recording) end the experiment, as any failure does.
+      if (!(error instanceof Refusal) || !CASE_REFUSALS.has(error.validator)) throw error;
+      o.log(`${name}: refused (${error.validator}): ${error.message}`);
+      (o.experiment.refused_cases ??= []).push({ case: name, validator: error.validator, message: error.message });
+    }
     await saveExperiment(o.dir, o.experiment);
   }
-  o.experiment.decided = o.experiment.series.every((s) => s.primary.decided);
-  if (o.video) {
+  o.experiment.decided = !o.experiment.refused_cases?.length && o.experiment.series.every((s) => s.primary.decided);
+  if (o.video && o.experiment.refused_cases?.some((r) => r.case === o.video))
+    o.log(`${o.video}: refused, so not filmed`);
+  else if (o.video) {
     o.log(`${o.video}: filming one block per side`);
     o.experiment.video = await film(o, o.video);
   }
