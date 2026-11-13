@@ -218,11 +218,11 @@ mark('home_interactive');
 
 `--profile` answers "where did the time go?" next to "is head faster?". After a case's timed pairs it runs profiled pairs (6 by default, `--profile-pairs`), in the same alternating order, each block a discarded warm run and one profiled run, so profiling never touches a timed run. `--pairs 0 --profile` profiles only; `check --profile` profiles head once per case.
 
-| Kind   | Where   | Recorded with                                                                                                                                                                                   |
-| ------ | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| native | Android | `simpleperf record --app` (cpu-clock, 1 kHz, frame-pointer call chains, every thread); needs a rooted (userdebug) emulator or a profileable build. Java and Kotlin frames through an R8 mapping |
-| native | iOS     | `/usr/bin/sample` on the simulator app's process (1 ms, every thread; stacks that end blocked in the kernel are left out). Instruments' Time Profiler is not used yet                           |
-| JS     | both    | Hermes's sampling profiler over CDP through Metro (`--metro <url>`, dev builds), or the app's own hook on a release build (below); symbolicated with the bundle's source map                    |
+| Kind   | Where   | Recorded with                                                                                                                                                                                                                                   |
+| ------ | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| native | Android | `simpleperf record --app` (cpu-clock, 1 kHz, frame-pointer call chains, every thread); needs a rooted (userdebug) emulator or a profileable build. Java and Kotlin frames through an R8 mapping                                                 |
+| native | iOS     | `/usr/bin/sample` on the simulator app's process by its pid (1 ms, every thread; stacks that end blocked in the kernel are left out; a cold launch is sampled from when the launch command returns). Instruments' Time Profiler is not used yet |
+| JS     | both    | Hermes's sampling profiler over CDP through Metro (`--metro <url>`, dev builds), or the app's own hook on a release build (below); symbolicated with the bundle's source map                                                                    |
 
 A release build's Hermes has no inspector, so JS needs the app's help: declare a hook in the bench file, steps that start and stop the app's profiler (a deep link to a test-only handler that calls `HermesSamplingProfiler`, or [react-native-release-profiler](https://github.com/margelo/react-native-release-profiler)) and where it writes the profile:
 

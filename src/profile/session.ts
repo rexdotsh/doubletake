@@ -1,10 +1,9 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname, join, resolve } from 'node:path';
 import type { Bench, Case } from '../bench.ts';
 import { type Device, Refusal } from '../device.ts';
 import type { FlowState } from '../flow.ts';
 import { type RunProfile, runOnce } from '../run.ts';
-import { run } from '../sh.ts';
 import type { Variant } from '../store.ts';
 import { get } from '../util.ts';
 import {
@@ -50,24 +49,30 @@ export type ProfileOptions = {
   prepare(v: Variant): Promise<void>;
 };
 
-const slug = (name: string) => name.replace(/[^\w-]+/g, '_');
-
-async function executable(v: Variant): Promise<string | undefined> {
-  if (!v.artifact) return undefined;
-  const out = await run(
-    'plutil',
-    ['-extract', 'CFBundleExecutable', 'raw', '-o', '-', join(v.artifact, 'Info.plist')],
-    {
-      check: false,
-    },
+const exists = (path: string) =>
+  access(path).then(
+    () => true,
+    () => false,
   );
-  return out.code === 0 ? out.stdout.trim() : undefined;
+
+/** A side's source map and R8 mapping: as given, else `<build>.map` and `<build>.mapping.txt` beside the build. */
+export async function symbolFiles(artifact: string | undefined, map?: string, r8?: string): Promise<Symbols> {
+  const stem = artifact?.replace(/\/$/, '').replace(/\.(app|apk)$/, '');
+  const find = async (given: string | undefined, suffix: string) => {
+    if (given) return resolve(given);
+    for (const path of stem ? [`${stem}${suffix}`, `${artifact?.replace(/\/$/, '')}${suffix}`] : [])
+      if (await exists(path)) return path;
+    return undefined;
+  };
+  return { map: await find(map, '.map'), r8: await find(r8, '.mapping.txt') };
 }
+
+const slug = (name: string) => name.replace(/[^\w-]+/g, '_');
 
 async function recorders(o: ProfileOptions, v: Variant): Promise<Recorder[]> {
   const { device } = o;
   const android = device.platform === 'android';
-  const list = [android ? simpleperf(device.id, v.appId) : sampler(await executable(v))];
+  const list = [android ? simpleperf(device.id, v.appId) : sampler()];
   const hook = o.bench.profile?.js;
   const file = hook?.file[device.platform];
   if (o.settings.metro) list.push(metroProfiler(o.settings.metro, v.appId, device.name));
@@ -80,14 +85,28 @@ async function recorders(o: ProfileOptions, v: Variant): Promise<Recorder[]> {
 
 type Got = Map<ProfileKind, Profile>;
 
-/** The run's profiler hooks; a recorder that refuses to start is dropped for the rest of the case. */
-function hooks(live: Recorder[], refused: Map<ProfileKind, string>, raw: (kind: ProfileKind) => string, got: Got) {
+/**
+ * The run's profiler hooks; a recorder that refuses is dropped for the rest of the case. Any recorder that fails,
+ * and every one when the run fails, is aborted, so no profiler outlives its run.
+ */
+export function hooks(
+  live: Recorder[],
+  refused: Map<ProfileKind, string>,
+  raw: (kind: ProfileKind) => string,
+  got: Got,
+) {
+  const all = live.slice();
+  const abort = () => Promise.all(all.map((r) => r.abort())).then(() => undefined);
   const each = async (what: (r: Recorder) => Promise<void>) => {
     for (const r of live.slice()) {
       try {
         await what(r);
       } catch (error) {
-        if (!(error instanceof Refusal)) throw error;
+        await r.abort();
+        if (!(error instanceof Refusal)) {
+          await abort();
+          throw error;
+        }
         refused.set(r.kind, error.message);
         live.splice(live.indexOf(r), 1);
       }
@@ -97,6 +116,7 @@ function hooks(live: Recorder[], refused: Map<ProfileKind, string>, raw: (kind: 
     start: (state, cold) => each((r) => r.start(state, cold)),
     launched: (state) => each((r) => r.launched(state)),
     stop: (state: FlowState) => each(async (r) => void got.set(r.kind, await r.stop(state, raw(r.kind)))),
+    abort,
   };
   return profile;
 }

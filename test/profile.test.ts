@@ -3,10 +3,13 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { validate } from '../src/bench.ts';
+import { Refusal } from '../src/device.ts';
+import { type Recorder, androidReadCommand } from '../src/profile/capture.ts';
+import { hooks, symbolFiles } from '../src/profile/session.ts';
 import { called, diffProfiles } from '../src/profile/diff.ts';
 import { flameSvg } from '../src/profile/flame.ts';
 import { parseCpuProfile, parseHermesTrace, parseJsProfile, toCpuProfile } from '../src/profile/hermes.ts';
-import { type Profile, builder, costs, mean } from '../src/profile/model.ts';
+import { type Profile, type ProfileKind, builder, costs, mean } from '../src/profile/model.ts';
 import { parseSample, parseSimpleperf, threadName } from '../src/profile/native.ts';
 import {
   deobfuscate,
@@ -395,4 +398,81 @@ test('sample thread lines name the thread, its queue, or neither', () => {
   expect(threadName('Thread_100   DispatchQueue_1: com.apple.main-thread  (serial)')).toBe('com.apple.main-thread');
   expect(threadName('Thread_101: com.facebook.react.JavaScript')).toBe('com.facebook.react.JavaScript');
   expect(threadName('Thread_102')).toBe('(unnamed thread)');
+});
+
+const recorder = (kind: ProfileKind, log: string[], fail?: { at: 'start' | 'stop'; error: Error }): Recorder => ({
+  kind,
+  start: async () => {
+    log.push(`${kind} start`);
+    if (fail?.at === 'start') throw fail.error;
+  },
+  launched: async () => {},
+  stop: async () => {
+    log.push(`${kind} stop`);
+    if (fail?.at === 'stop') throw fail.error;
+    return builder(kind, 'test').done();
+  },
+  abort: async () => void log.push(`${kind} abort`),
+});
+// The recorders here never read the flow state.
+const state: Parameters<Recorder['start']>[0] = JSON.parse('{}');
+
+test('a profiler that refuses to start is aborted, refused and dropped; the others go on', async () => {
+  const log: string[] = [];
+  const live = [recorder('native', log), recorder('js', log, { at: 'start', error: new Refusal('NoProfiler', 'no') })];
+  const refused = new Map<ProfileKind, string>();
+  const got = new Map<ProfileKind, Profile>();
+  const h = hooks(live, refused, (k) => k, got);
+  await h.start(state, false);
+  await h.stop(state);
+  expect(log).toEqual(['native start', 'js start', 'js abort', 'native stop']);
+  expect(refused.get('js')).toBe('no');
+  expect([...got.keys()]).toEqual(['native']);
+});
+
+test('an unexpected profiler failure, or a failed run, aborts every profiler, dropped ones too', async () => {
+  const log: string[] = [];
+  const live = [recorder('native', log), recorder('js', log, { at: 'stop', error: new Error('socket closed') })];
+  const h = hooks(live, new Map(), (k) => k, new Map());
+  await h.start(state, false);
+  expect(
+    await h.stop(state).then(
+      () => 'stopped',
+      (error: unknown) => String(error),
+    ),
+  ).toContain('socket closed');
+  expect(log.filter((l) => l.endsWith('abort')).toSorted()).toEqual(['js abort', 'js abort', 'native abort']);
+  const log2: string[] = [];
+  const h2 = hooks([recorder('native', log2)], new Map(), (k) => k, new Map());
+  await h2.start(state, true);
+  await h2.abort();
+  expect(log2).toEqual(['native start', 'native abort']);
+});
+
+test("an app's profile file is listed and read by the same user, the shell or the app through run-as", () => {
+  expect(androidReadCommand('com.example', 'cache/profiles/')).toBe(
+    `(cd '/data/data/com.example/cache/profiles/' && cat "$(ls -t | head -1)") 2>/dev/null || run-as com.example sh -c 'cd '\\''/data/data/com.example/cache/profiles/'\\'' && cat "$(ls -t | head -1)"'`,
+  );
+  expect(androidReadCommand('com.example', '/sdcard/p.json')).toBe(
+    `(cat '/sdcard/p.json') 2>/dev/null || run-as com.example sh -c 'cat '\\''/sdcard/p.json'\\'''`,
+  );
+});
+
+test('symbol files are found beside a build, or taken as given', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'doubletake-test-'));
+  try {
+    await writeFile(join(dir, 'app.apk'), '');
+    await writeFile(join(dir, 'app.map'), '{}');
+    await writeFile(join(dir, 'app.mapping.txt'), '');
+    expect(await symbolFiles(join(dir, 'app.apk'))).toEqual({
+      map: join(dir, 'app.map'),
+      r8: join(dir, 'app.mapping.txt'),
+    });
+    expect(await symbolFiles(join(dir, 'other.apk'), join(dir, 'app.map'))).toEqual({
+      map: join(dir, 'app.map'),
+      r8: undefined,
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

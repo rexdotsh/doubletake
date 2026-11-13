@@ -48,6 +48,8 @@ export type RunProfile = {
   start(state: FlowState, cold: boolean): Promise<void>;
   launched(state: FlowState): Promise<void>;
   stop(state: FlowState): Promise<void>;
+  /** Kills every profiler still running: the run failed between start and stop. */
+  abort(): Promise<void>;
 };
 
 /** Log lines reach the host a few ms after they are written; wait this long after a window before reading it. */
@@ -384,6 +386,7 @@ export async function runOnce(ctx: RunContext): Promise<RunResult> {
       ? await launchRun(ctx, state, values, refused, filming)
       : await windowRun(ctx, state, values, refused, filming);
   } catch (error) {
+    await ctx.profile?.abort();
     if (filming.recording)
       await filming.recording.stop().catch((stopError: unknown) => {
         throw new RecorderStuck(

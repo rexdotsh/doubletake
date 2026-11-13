@@ -24,7 +24,21 @@ export type Recorder = {
   launched(state: FlowState): Promise<void>;
   /** Ends recording; the raw output goes to `raw` plus an extension. */
   stop(state: FlowState, raw: string): Promise<Profile>;
+  /** Kills whatever this recorder still has running (a failed run, a refused stop); never throws. */
+  abort(): Promise<void>;
 };
+
+const quietly = (work: () => Promise<unknown>) =>
+  work().then(
+    () => undefined,
+    () => undefined,
+  );
+
+/** An expected way for a profiler not to start: a refusal for its kind, not a failed experiment. */
+const refusal = (what: string, error: unknown) =>
+  error instanceof Refusal
+    ? new Refusal('NoProfiler', `${what}: ${error.message}`)
+    : new Refusal('NoProfiler', `${what}: ${error instanceof Error ? error.message : String(error)}`);
 
 /** Starts `cmd`, reads the pid it prints first, and fails with its output if it exits within `settle` ms. */
 async function background(cmd: string, args: string[], what: string, settle = 500) {
@@ -39,8 +53,10 @@ async function background(cmd: string, args: string[], what: string, settle = 50
   const pid = await first.promise;
   clearTimeout(timer);
   const early = await Promise.race([exited.then(() => true), sleep(settle).then(() => false)]);
-  if (early || !/^\d+$/.test(pid))
+  if (early || !/^\d+$/.test(pid)) {
+    await stop(child, 'SIGKILL');
     throw new Refusal('NoProfiler', `${what} did not start: ${lines.join(' ').trim() || 'no output'}`);
+  }
   return { child, pid, exited };
 }
 
@@ -77,6 +93,7 @@ export function simpleperf(serial: string, appId: string): Recorder {
     async stop(_state, raw) {
       if (!session) throw new Error('simpleperf was not started');
       await shell(`kill -INT ${session.pid} 2>/dev/null || true`);
+      // On a timeout the session stays set, so abort() kills the device's simpleperf too.
       await ended(session.child, session.exited, 30_000, 'simpleperf');
       session = undefined;
       await shell(`simpleperf report-sample --show-callchain -i ${remote} -o ${remote}.txt`);
@@ -86,48 +103,64 @@ export function simpleperf(serial: string, appId: string): Recorder {
       const text = await readFile(`${raw}.txt`, 'utf8');
       return parseSimpleperf(text);
     },
+    async abort() {
+      const live = session;
+      session = undefined;
+      if (!live) return;
+      await quietly(() => shell(`kill -9 ${live.pid} 2>/dev/null; rm -f ${remote} ${remote}.txt`));
+      await quietly(() => stop(live.child, 'SIGKILL'));
+    },
   };
 }
 
 /**
- * iOS Simulator: `/usr/bin/sample` on the app's host process, every thread at 1 ms. A cold launch waits for the
- * process by executable name. Instruments' Time Profiler would be the platform's own; this is what runs
- * everywhere `sample` does.
+ * iOS Simulator: `/usr/bin/sample` on the app's host process, every thread at 1 ms, attached by the pid the launch
+ * returned (never by name: another simulator's copy of the app has the same executable). For a cold launch it
+ * attaches once \`simctl launch\` has returned, so the process's first moments are not in the profile, and the
+ * profile says so. Instruments' Time Profiler would be the platform's own; this is what runs everywhere.
  */
-export function sampler(executable: string | undefined): Recorder {
-  let session: { child: ChildProcess; exited: Promise<void> } | undefined;
-  let file = '';
-  const begin = (target: string, wait: boolean) => {
-    file = join(tmpdir(), `doubletake-sample-${process.pid}-${Date.now()}.txt`);
-    const child = stream(
-      '/usr/bin/sample',
-      [target, '120', '1', ...(wait ? ['-wait'] : []), '-mayDie', '-file', file],
-      () => {},
-    );
-    session = { child, exited: new Promise((resolve) => child.once('close', () => resolve())) };
+export function sampler(): Recorder {
+  let session: { child: ChildProcess; exited: Promise<void>; file: string } | undefined;
+  let cold = false;
+  const begin = async (pid: number | undefined) => {
+    if (!pid) throw new Refusal('NoProfiler', 'sample: no app process to attach to');
+    const file = join(tmpdir(), `doubletake-sample-${process.pid}-${Date.now()}.txt`);
+    const child = stream('/usr/bin/sample', [String(pid), '120', '1', '-mayDie', '-file', file], () => {});
+    session = { child, file, exited: new Promise((resolve) => child.once('close', () => resolve())) };
+    // `sample` attaches within a few ms; give it that before the window opens.
+    await sleep(200);
+    if (child.exitCode !== null) {
+      session = undefined;
+      throw new Refusal('NoProfiler', `sample could not attach to pid ${pid}`);
+    }
   };
   return {
     kind: 'native',
-    async start(state, cold) {
-      if (!cold) begin(String(state.launched?.pid ?? 0), false);
-      else if (executable) begin(executable, true);
-      // `sample` attaches within a few ms; give it that before the window opens.
-      await sleep(200);
+    async start(state, isCold) {
+      cold = isCold;
+      if (!isCold) await begin(state.launched?.pid);
     },
-    async launched(state) {
-      if (!session) begin(String(state.launched?.pid ?? 0), false);
-    },
+    launched: (state) => begin(state.launched?.pid),
     async stop(_state, raw) {
       if (!session) throw new Error('sample was not started');
       session.child.kill('SIGINT');
-      // sample symbolicates after it stops: seconds for a large app.
+      // sample symbolicates after it stops: seconds for a large app. On a timeout abort() cleans up.
       await ended(session.child, session.exited, 60_000, 'sample');
+      const { file } = session;
       session = undefined;
       const text = await readFile(file, 'utf8').catch(() => '');
+      await rm(file, { force: true });
       if (!text) throw new Refusal('NoProfiler', 'sample wrote no report (is the app a simulator process?)');
       await writeFile(`${raw}.txt`, text);
-      await rm(file, { force: true });
-      return parseSample(text);
+      const p = parseSample(text);
+      return cold ? { ...p, notes: [...p.notes, 'sampling began once the launch command returned'] } : p;
+    },
+    async abort() {
+      const live = session;
+      session = undefined;
+      if (!live) return;
+      await quietly(() => stop(live.child, 'SIGKILL'));
+      await rm(live.file, { force: true });
     },
   };
 }
@@ -142,9 +175,15 @@ export function metroProfiler(metro: string, appId: string, device: string): Rec
   let late = 0;
   const begin = async () => {
     const started = Date.now();
-    session = await connect(await find(metro, appId, device));
-    await session.send('Profiler.enable');
-    await session.send('Profiler.start');
+    try {
+      session = await connect(await find(metro, appId, device));
+      await session.send('Profiler.enable');
+      await session.send('Profiler.start');
+    } catch (error) {
+      session?.close();
+      session = undefined;
+      throw refusal('Hermes profiler over CDP', error);
+    }
     late = Date.now() - started;
   };
   return {
@@ -162,6 +201,10 @@ export function metroProfiler(metro: string, appId: string, device: string): Rec
       await writeFile(`${raw}.cpuprofile`, JSON.stringify(profile));
       const p = await withMetroMap(parseCpuProfile(profile), profile);
       return late > 1000 ? { ...p, notes: [...p.notes, `profiling began ${late} ms after the launch`] } : p;
+    },
+    async abort() {
+      session?.close();
+      session = undefined;
     },
   };
 }
@@ -188,30 +231,48 @@ export type Hook = { start?: Step[]; stop: Step[]; file: string };
  * the newest file in that folder.
  */
 export function hookProfiler(hook: Hook, read: (path: string) => Promise<string>): Recorder {
+  const begin = async (state: FlowState) => {
+    if (hook.start)
+      await runSteps(hook.start, state).catch((error: unknown) =>
+        Promise.reject(refusal("the app's profiler hook", error)),
+      );
+  };
   return {
     kind: 'js',
     async start(state, cold) {
-      if (!cold && hook.start) await runSteps(hook.start, state);
+      if (!cold) await begin(state);
     },
-    async launched(state) {
-      if (hook.start) await runSteps(hook.start, state);
-    },
+    launched: begin,
     async stop(state, raw) {
       await runSteps(hook.stop, state);
       const text = await read(hook.file);
       await writeFile(`${raw}.json`, text);
       return parseJsProfile(JSON.parse(text));
     },
+    // The app's profiler lives in the app, which every block terminates when it ends.
+    abort: async () => {},
   };
 }
 
-/** Reads a file of the app on Android: as root, else through run-as (a debuggable build). */
+/** Single-quoted for a POSIX shell. */
+const q = (x: string) => `'${x.replaceAll("'", `'\\''`)}'`;
+
+/**
+ * The device shell command that prints an app's file, `path` ending in `/` for the newest file in that folder:
+ * as the shell (root, or a world-readable path), else as the app through run-as (a debuggable build), the
+ * folder listed by the same user that reads it.
+ */
+export function androidReadCommand(appId: string, path: string): string {
+  const full = path.startsWith('/') ? path : `/data/data/${appId}/${path}`;
+  const script = full.endsWith('/') ? `cd ${q(full)} && cat "$(ls -t | head -1)"` : `cat ${q(full)}`;
+  return `(${script}) 2>/dev/null || run-as ${appId} sh -c ${q(script)}`;
+}
+
+/** Reads a file of the app on Android. */
 export function androidReader(serial: string, appId: string) {
   return async (path: string): Promise<string> => {
-    const full = path.startsWith('/') ? path : `/data/data/${appId}/${path}`;
-    const pick = full.endsWith('/') ? `"${full}$(ls -t ${full} | head -1)"` : `"${full}"`;
-    const out = await run('adb', ['-s', serial, 'exec-out', `cat ${pick} 2>/dev/null || run-as ${appId} cat ${pick}`]);
-    if (!out.stdout) throw new Refusal('NoProfiler', `the app wrote no profile at ${full}`);
+    const out = await run('adb', ['-s', serial, 'exec-out', androidReadCommand(appId, path)], { check: false });
+    if (!out.stdout) throw new Refusal('NoProfiler', `the app wrote no profile at ${path}`);
     return out.stdout;
   };
 }

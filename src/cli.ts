@@ -1,4 +1,4 @@
-import { access, mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { cpus, totalmem } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -9,7 +9,7 @@ import { Refusal } from './device.ts';
 import { androidDevice } from './android.ts';
 import { appRoot, bundleReport, groupAppCode, readBundle } from './bundle.ts';
 import { runBench, runCheck } from './experiment.ts';
-import type { Symbols } from './profile/session.ts';
+import { symbolFiles } from './profile/session.ts';
 import { serve } from './mcp.ts';
 import { iosDevice, listSimulators } from './ios.ts';
 import type { Platform } from './metrics.ts';
@@ -213,9 +213,18 @@ async function remote(command: 'bench' | 'check', file: string, ssh: string, fla
     const v = flags[k];
     return v ? [`--${k}`, v] : [];
   });
-  for (const k of ['base-map', 'head-map', 'base-mapping', 'head-mapping'] as const) {
-    const v = flags[k];
-    if (v) sent.push(`--${k}`, v.startsWith('host:') ? v.slice('host:'.length) : await sendArtifact(host, resolve(v)));
+  // Symbol files: a host: one is named as it is; a local one, given or found beside a local build, goes over.
+  for (const role of ['base', 'head'] as const) {
+    const spec = flags[role];
+    const local = flags.profile && spec && !/^(host|installed):/.test(spec) ? resolve(spec) : undefined;
+    const found = local ? await symbolFiles(local) : {};
+    for (const [k, v] of [
+      [`${role}-map`, flags[`${role}-map`] ?? found.map],
+      [`${role}-mapping`, flags[`${role}-mapping`] ?? found.r8],
+    ] as const) {
+      if (v)
+        sent.push(`--${k}`, v.startsWith('host:') ? v.slice('host:'.length) : await sendArtifact(host, resolve(v)));
+    }
   }
   const platform = platformOf(flags, [flags.base, flags.head]);
   const fetched = await runRemote(host, {
@@ -347,24 +356,6 @@ async function measure(command: 'bench' | 'check', file: string | undefined, fla
   else if (flags['fail-on-regression'] && done.series.some((s) => s.primary.verdict_kind === 'worse'))
     process.exitCode = 6;
   else if (command === 'bench' && !done.decided && !(pairs === 0 && profile)) process.exitCode = 5;
-}
-
-const exists = (path: string) =>
-  access(path).then(
-    () => true,
-    () => false,
-  );
-
-/** A side's source map and R8 mapping: as given, else `<build>.map` and `<build>.mapping.txt` beside the build. */
-async function symbolFiles(artifact: string | undefined, map?: string, r8?: string): Promise<Symbols> {
-  const stem = artifact?.replace(/\/$/, '').replace(/\.(app|apk)$/, '');
-  const find = async (given: string | undefined, suffix: string) => {
-    if (given) return resolve(given);
-    for (const path of stem ? [`${stem}${suffix}`, `${artifact?.replace(/\/$/, '')}${suffix}`] : [])
-      if (await exists(path)) return path;
-    return undefined;
-  };
-  return { map: await find(map, '.map'), r8: await find(r8, '.mapping.txt') };
 }
 
 async function report(ref: string | undefined, flags: Flags): Promise<void> {
