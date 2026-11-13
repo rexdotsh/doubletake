@@ -13,7 +13,7 @@ function signed(shown: string, x: number): string {
   return x < 0 ? `${MINUS}${shown.replace('-', '')}` : x > 0 ? `+${shown}` : shown;
 }
 
-function value(metric: string, v: number | undefined): string {
+export function value(metric: string, v: number | undefined): string {
   if (v === undefined || Number.isNaN(v)) return '—';
   const unit = metricInfo(metric)?.unit;
   if (unit === 'bytes') return v >= 2 ** 20 ? `${(v / 2 ** 20).toFixed(2)} MiB` : `${(v / 1024).toFixed(1)} KiB`;
@@ -23,7 +23,7 @@ function value(metric: string, v: number | undefined): string {
 }
 
 /** The change and its interval, with as many decimals as the interval's width needs. */
-function change(c: Comparison): string {
+export function change(c: Comparison): string {
   if (c.exact)
     return `${c.relative ? signed(`${(c.estimate * 100).toFixed(1)}%`, c.estimate) : signed(value(c.metric, Math.abs(c.estimate)), c.estimate)} (exact)`;
   if (Number.isNaN(c.lo)) return '—';
@@ -37,7 +37,7 @@ function change(c: Comparison): string {
   return `${a(c.estimate)} [${a(c.lo)} … ${a(c.hi)}]`;
 }
 
-function verdict(c: Comparison): string {
+export function verdict(c: Comparison): string {
   const [better, worse] = words(c.metric);
   const boundText = c.relative ? `±${(c.bound * 100).toFixed(1).replace(/\.0$/, '')}%` : `±${value(c.metric, c.bound)}`;
   switch (c.verdict_kind) {

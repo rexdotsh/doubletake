@@ -208,9 +208,16 @@ export function metricInfo(name: string): MetricInfo | undefined {
     return {
       unit: 'ms',
       better: 'lower',
-      source: 'the launch (or run start) to the SDK mark',
+      source: 'the launch (or run start) to the mark',
       platforms: both,
       sdk: true,
+    };
+  if (/^phase\.[\w.-]+->[\w.-]+$/.test(name))
+    return {
+      unit: 'ms',
+      better: 'lower',
+      source: "a launch timeline: one mark to the launch's next mark",
+      platforms: both,
     };
   return METRICS[name];
 }

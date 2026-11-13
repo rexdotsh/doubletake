@@ -6,11 +6,15 @@
 //   f <t> <missed> <late ms>   a JS frame that came late
 //   r <t> <bytes>      a request finished
 //   p <t> <ms>         a React commit (profiling builds)
+// Apps without the SDK can mark moments with `[perf-mark] <name> <t>` (the marks protocol in the README).
 
-/** One SDK line; `pid` is the writing process when the log says it (os_log and logcat do). */
+/**
+ * One SDK line; `pid` is the writing process when the log says it (os_log and logcat do). A mark with `os`
+ * is a platform's own log line (a process start, a first frame), timed by the log, not by the app.
+ */
 export type SdkEvent = (
   | { kind: 'start'; t: number; frames: boolean; network: boolean }
-  | { kind: 'mark'; t: number; name: string }
+  | { kind: 'mark'; t: number; name: string; os?: true }
   | { kind: 'frame'; t: number; missed: number; late: number }
   | { kind: 'request'; t: number; bytes: number }
   | { kind: 'commit'; t: number; ms: number }
@@ -25,7 +29,11 @@ export type Counters = {
   render: number;
 };
 
+const PERF_MARK = /\[perf-mark\] ([\w.-]+) (\d+(?:\.\d+)?)/;
+
 export function parseSdkLine(text: string): SdkEvent | null {
+  const perf = PERF_MARK.exec(text);
+  if (perf?.[1] && perf[2]) return { kind: 'mark', t: Number(perf[2]), name: perf[1] };
   const prefix = text.indexOf('[doubletake] ');
   if (prefix < 0) return null;
   const [kind, time, a, b] = text

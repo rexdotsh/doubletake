@@ -25,8 +25,11 @@ export type Case = {
   primary: string;
   /** More metrics to report; secondaries get words only after the primary decided. */
   metrics?: string[];
-  /** A cold launch per run: the app is terminated, launched and timed until `until` (a mark) or until the screen settles. */
-  launch?: { until?: string; visual?: boolean; hold?: string; timeout?: string };
+  /**
+   * A cold launch per run: the app is terminated, launched and timed until `until` (a mark) or until the screen
+   * settles. `timeline`: the platform's launch lines are marks too, and the gaps between marks are phases.
+   */
+  launch?: { until?: string; visual?: boolean; hold?: string; timeout?: string; timeline?: boolean };
   /** Untimed steps before each run. */
   setup?: Step[];
   /** Timed steps: the run. */
@@ -228,7 +231,9 @@ function parseStep(value: unknown, where: string): Step {
 function metric(value: unknown, where: string): string {
   const name = string(value, where);
   if (!metricInfo(name))
-    throw new Error(`${where}: unknown metric ${name}${nearest(name, [...Object.keys(METRICS), 'mark.<name>'])}`);
+    throw new Error(
+      `${where}: unknown metric ${name}${nearest(name, [...Object.keys(METRICS), 'mark.<name>', 'phase.<from>-><to>'])}`,
+    );
   return name;
 }
 
@@ -244,12 +249,14 @@ function parseCase(value: unknown, where: string): Case {
   let launch: Case['launch'];
   if (c.launch !== undefined) {
     const l = object(c.launch, `${where}.launch`);
-    keys(l, ['until', 'visual', 'hold', 'timeout'], `${where}.launch`);
-    if (l.visual !== undefined && typeof l.visual !== 'boolean')
-      throw new Error(`${where}.launch.visual: true or false`);
+    keys(l, ['until', 'visual', 'hold', 'timeout', 'timeline'], `${where}.launch`);
+    for (const flag of ['visual', 'timeline'])
+      if (l[flag] !== undefined && typeof l[flag] !== 'boolean')
+        throw new Error(`${where}.launch.${flag}: true or false`);
     launch = {
       until: optional(l.until, (v) => mark(v, `${where}.launch.until`)),
-      visual: l.visual,
+      visual: l.visual === undefined ? undefined : l.visual === true,
+      timeline: l.timeline === undefined ? undefined : l.timeline === true,
       hold: optional(l.hold, (v) => duration(v, `${where}.launch.hold`)),
       timeout: optional(l.timeout, (v) => duration(v, `${where}.launch.timeout`)),
     };

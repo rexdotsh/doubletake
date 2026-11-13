@@ -135,12 +135,70 @@ What it sees and what it does not:
 - The probe costs a walk of each commit's rendered fibers: timing metrics in a probe case read the app with it on. Opening a bridge's link before and after the window can wake the app (the bridge's log follower attaches once, before the first window); CDP does not.
 - `report` adds a section per case: the counts, the components that re-rendered most, duplicate requests, and a request waterfall (in a bench, each side's run with the median renders, and the components whose renders changed most). The counts get verdicts as any metric (counts that every run read the same compare exactly).
 
+## Launch timelines
+
+Where do the seconds to the first screen go? Give a launch case `timeline: true`:
+
+```ts
+'startup': {
+  launch: { until: 'mark:home_interactive', timeline: true, hold: '3s' },
+  primary: 'mark.home_interactive',
+  metrics: ['mark.i18n_ready', 'mark.assets_ready'], // declared marks a launch did not write are refused, by name
+},
+```
+
+Each launch is then a list of marks, each timed from the launch:
+
+- the platform's own lines: on Android with React Native's new architecture, `rn.start` (the React host starts creating its instance) and `js.load` (it starts loading the bundle); `js.run` (React Native's `Running "<app>"`, when the bundle has run and the root mounts), `first.frame` (Android: ActivityTaskManager's `Displayed`, the same moment as `launch.ttid`), `splash.removed` (Android 12+: the system splash window is removed) and `fully.drawn` (Android, when the app calls `reportFullyDrawn()`). The iOS origin is the process's exec; Android's is the intent, which the fork follows within a few ms;
+- the app's marks: SDK marks and [perf marks](#the-marks-protocol).
+
+A phase is the gap between two consecutive marks, in the order that launch wrote them: `phase.start->rn.start`, `phase.rn.start->js.load` and so on. Every `mark.<name>` and `phase.<from>-><to>` is a metric like any other: a case can make one its primary, and an A/B compares each with the same pairs, intervals and verdicts. A mark a launch did not write is missing from that launch; doubletake never fills it in.
+
+```
+$ doubletake timeline latest          # a production React Native app, signed in, on an Android emulator
+startup: launch timeline (ms after the launch intent)
+
+head · 16 launches
+  launch   rn.start  js.load  js.run  i18n_ready  assets_ready  first.frame  splash.removed  app_ready  home_interactive
+  1             353      462     573         663           759          896           1,349      1,803             4,361
+  …
+  median        348      448     561         644           736          876           1,328      1,803             4,646
+
+head: median waterfall, 4,646 ms to the last mark
+  phase                                at      ms  n
+  start → rn.start                      0     348  16  ███
+  rn.start → js.load                  348     103  16     █
+  js.load → js.run                    448     112  16      █
+  …
+  app_ready → home_interactive      1,803   2,823  16                  ████████████████████████
+SVG: ~/.doubletake/experiments/exp_…/timeline-startup.svg
+```
+
+`doubletake timeline [exp|latest]` prints each measured launch's marks (warm-ups left out), the median waterfall per side (a phase starts at the median of its first mark and lasts the median gap), the experiment's comparison of each phase and mark when it is an A/B, and which marks some launches missed. It writes one SVG per case: the median phases of each side as bars, then every launch as a strip. `--format json` gives the same per launch and per phase. A `check` works too: one launch per case.
+
+### The marks protocol
+
+Any app can mark its start without doubletake's SDK. Call `mark(name)` once per name; each call:
+
+1. appends `{ name, epochMs }` to `globalThis.__PERF_MARKS__` (an array), with `epochMs` from `Date.now()`;
+2. logs one line with `console.log`: `[perf-mark] <name> <epochMs>`.
+
+Names are letters, digits, `_`, `.` and `-`. React Native writes `console.log` to logcat (tag `ReactNativeJS`) and to the unified log on iOS (subsystem `com.facebook.react.log`), in release builds too, which is where doubletake reads it; the line's own `epochMs` is the time, not the log's. A native app can log the same line. `__PERF_MARKS__` is for tools that read the JS runtime instead (a debugger on a development build).
+
+`doubletake/marks` is that function, if you would rather not copy it (apps never need it):
+
+```ts
+import { mark } from 'doubletake/marks';
+mark('home_interactive');
+```
+
 ## Metrics
 
 | Metric                                              | Where       | From                                                                                                                                                                                 |
 | --------------------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `launch.ttid`                                       | Android     | `am start -W` TotalTime: the intent to the first frame                                                                                                                               |
 | `launch.ttfd`, `mark.<name>`                        | both, SDK   | the process start (iOS) or the launch intent (Android) to the mark                                                                                                                   |
+| `phase.<from>-><to>`                                | both        | a [launch timeline](#launch-timelines): one mark to the launch's next mark                                                                                                           |
 | `launch.visual`                                     | both        | a screen recording: the launch (iOS) or its first visible change (Android, whose recorder has no start clock) to the frame after which the screen stays within 1% of its final image |
 | `cpu.time`, `cpu.idle`                              | both        | the app process's CPU time over the run, or per second idle                                                                                                                          |
 | `memory.peak`, `memory.end`                         | both        | iOS `footprint` (phys_footprint and its peak); Android VmHWM and PSS                                                                                                                 |
@@ -172,6 +230,7 @@ doubletake bench <file> --base <app> --head <app> [--case name] [--pairs auto|N]
 doubletake check <file> --head <app>                # each case once: does it work, what does it read?
 doubletake bundle <js> <map> [<base js> <base map>]  # what a Metro bundle ships, by package; with a base, the change
 doubletake report [exp|latest] [--format text|md|json] [--comment <pr> [--repo owner/name]]
+doubletake timeline [exp|latest] [--case name] [--format text|json] [--out dir]  # launch timelines and SVGs
 doubletake status
 doubletake mcp                                      # the same commands as MCP tools (stdio)
 ```

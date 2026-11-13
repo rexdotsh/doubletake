@@ -1,5 +1,4 @@
 import type { Platform } from './metrics.ts';
-import { parseSdkLine } from './events.ts';
 import { sleep, stop, stream } from './sh.ts';
 import type { SdkEvent } from './events.ts';
 
@@ -91,19 +90,18 @@ export class Refusal extends Error {
   }
 }
 
-/** Streams a log command, keeps the SDK's lines (`extract` gives a line's message and writer), and waits on them. */
+/** Streams a log command, keeps the events `parse` finds in its lines (SDK lines, marks), and waits on them. */
 export async function logTap(
   cmd: string,
   args: readonly string[],
-  extract: (line: string) => { message: string; pid?: number } | null,
+  parse: (line: string) => SdkEvent | null,
 ): Promise<LogTap> {
   const events: SdkEvent[] = [];
   const waiters = new Set<() => void>();
   const child = stream(cmd, args, (line) => {
-    const got = extract(line);
-    const event = got === null ? null : parseSdkLine(got.message);
+    const event = parse(line);
     if (!event) return;
-    events.push(got?.pid === undefined ? event : { ...event, pid: got.pid });
+    events.push(event);
     for (const wake of waiters) wake();
   });
   await sleep(LOG_ATTACH_MS);
